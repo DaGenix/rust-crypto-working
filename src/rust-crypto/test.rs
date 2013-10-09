@@ -9,6 +9,10 @@
 
 extern mod extra;
 
+pub mod aes;
+pub mod aesni;
+pub mod aessafe;
+pub mod blockmodes;
 mod cryptoutil;
 pub mod digest;
 pub mod hmac;
@@ -18,3 +22,5 @@ pub mod pbkdf2;
 pub mod scrypt;
 pub mod sha1;
 pub mod sha2;
+pub mod symmetriccipher;
+pub mod util;

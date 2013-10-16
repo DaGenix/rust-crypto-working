@@ -12,6 +12,7 @@
 
 #[feature(asm)];
 #[feature(macro_rules)];
+#[feature(globs)];
 
 extern mod extra;
 

@@ -67,3 +67,27 @@ pub trait StreamEncryptor {
 pub trait StreamDecryptor {
     fn decrypt(&mut self, input: &[u8], out: &mut [u8]);
 }
+
+
+/*
+pub trait BlockEncryptor {
+    fn encrypt_block(&self, input: &[u8], output: &mut [u8]);
+}
+
+pub trait BlockEncryptorX8 {
+    fn encrypt_block_x8(&self, input: &[u8], output: &mut [u8]);
+}
+
+pub trait BlockDecryptor {
+    fn decrypt_block(&self, input: &[u8], output: &mut [u8]);
+}
+
+pub trait BlockDecryptorX8 {
+    fn decrypt_block_x8(&self, input: &[u8], output: &mut [u8]);
+}
+*/
+
+pub trait SynchronousStreamCipher {
+    fn generate(&mut self, result: &mut [u8]);
+    fn process(&mut self, input: &[u8], output: &mut [u8]);
+}

@@ -9,7 +9,7 @@
  * NOT A FIXED TIME IMPLEMENTATION.
  */
 
-use symmetriccipher::{StreamEncryptor, StreamDecryptor};
+use symmetriccipher::SynchronousStreamCipher;
 
 pub struct Rc4 {
     priv i: uint,
@@ -31,30 +31,29 @@ impl Rc4 {
         }
         rc4
     }
-}
-
-fn process(rc4: &mut Rc4, input: &[u8], out: &mut [u8]) {
-    assert!(input.len() == out.len());
-    for (x, y) in input.iter().zip(out.mut_iter()) {
-        rc4.i = (rc4.i + 1) % 256;
-        rc4.j = (rc4.j + rc4.state[rc4.i] as uint) % 256;
-        rc4.state.swap(rc4.i, rc4.j);
-        let k = rc4.state[(rc4.state[rc4.i] + rc4.state[rc4.j]) as uint];
-        *y = *x ^ k;
+    fn next(&mut self) -> u8 {
+        self.i = (self.i + 1) % 256;
+        self.j = (self.j + self.state[self.i] as uint) % 256;
+        self.state.swap(self.i, self.j);
+        let k = self.state[(self.state[self.i] + self.state[self.j]) as uint];
+        return k;
     }
 }
 
-impl StreamEncryptor for Rc4 {
-    fn encrypt(&mut self, input: &[u8], out: &mut [u8]) {
-        process(self, input, out);
+impl SynchronousStreamCipher for Rc4 {
+    fn generate(&mut self, result: &mut [u8]) {
+        for y in result.mut_iter() {
+            *y ^= self.next();
+        }
+    }
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        assert!(input.len() == output.len());
+        for (x, y) in input.iter().zip(output.mut_iter()) {
+            *y = *x ^ self.next();
+        }
     }
 }
 
-impl StreamDecryptor for Rc4 {
-    fn decrypt(&mut self, input: &[u8], out: &mut [u8]) {
-        process(self, input, out);
-    }
-}
 
 #[cfg(test)]
 mod test {
@@ -94,7 +93,14 @@ mod test {
         for t in tests.iter() {
             let mut rc4 = Rc4::new(t.key.as_bytes());
             let mut result = vec::from_elem(t.output.len(), 0u8);
-            rc4.encrypt(t.input.as_bytes(), result);
+            rc4.process(t.input.as_bytes(), result);
+            assert!(result == t.output);
+        }
+        for t in tests.iter() {
+            let mut rc4 = Rc4::new(t.key.as_bytes());
+            let mut result = vec::from_elem(t.output.len(), 0u8);
+            vec::bytes::copy_memory(result, t.input.as_bytes(), t.input.len());
+            rc4.generate(result);
             assert!(result == t.output);
         }
     }
@@ -111,7 +117,7 @@ mod bench {
         let input = [1u8, ..10];
         let mut output = [0u8, ..10];
         do bh.iter {
-            rc4.encrypt(input, output);
+            rc4.process(input, output);
         }
         bh.bytes = input.len() as u64;
     }
@@ -122,7 +128,7 @@ mod bench {
         let input = [1u8, ..1024];
         let mut output = [0u8, ..1024];
         do bh.iter {
-            rc4.encrypt(input, output);
+            rc4.process(input, output);
         }
         bh.bytes = input.len() as u64;
     }
@@ -133,7 +139,7 @@ mod bench {
         let input = [1u8, ..65536];
         let mut output = [0u8, ..65536];
         do bh.iter {
-            rc4.encrypt(input, output);
+            rc4.process(input, output);
         }
         bh.bytes = input.len() as u64;
     }

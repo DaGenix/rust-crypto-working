@@ -4,8 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use symmetriccipher::*;
-
+use symmetriccipher::{BlockEncryptor, BlockDecryptor};
 
 pub struct AesNi128Encryptor {
     priv round_keys: [u8, ..16 * (10 + 1)]
@@ -47,7 +46,6 @@ impl BlockDecryptor for AesNi128Decryptor {
     }
 }
 
-
 pub struct AesNi192Encryptor {
     priv round_keys: [u8, ..16 * (12 + 1)]
 }
@@ -88,7 +86,6 @@ impl BlockDecryptor for AesNi192Decryptor {
     }
 }
 
-
 pub struct AesNi256Encryptor {
     priv round_keys: [u8, ..16 * (14 + 1)]
 }
@@ -128,7 +125,6 @@ impl BlockDecryptor for AesNi256Decryptor {
         decrypt_block_aseni(14, input, self.round_keys, output);
     }
 }
-
 
 enum KeyType {
     Encryption,

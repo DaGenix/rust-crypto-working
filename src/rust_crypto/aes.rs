@@ -4,6 +4,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*
+
 #[cfg(target_arch = "x86")]
 #[cfg(target_arch = "x86_64")]
 use aesni::*;
@@ -265,10 +267,11 @@ define_dec!(
     AesNiDecryptionEngine256,
     AesSafeDecryptionEngine256)
 
+*/
 
 #[cfg(test)]
 mod test {
-    use aes::*;
+//    use aes::*;
 
     #[cfg(target_arch = "x86")]
     #[cfg(target_arch = "x86_64")]
@@ -408,7 +411,7 @@ mod test {
         }
     }
 
-
+/*
     #[test]
     fn testAesDefault128() {
         let tests = tests128();
@@ -438,7 +441,7 @@ mod test {
             run_test(&mut enc, &mut dec, t);
         }
     }
-
+*/
 
     #[cfg(target_arch = "x86")]
     #[cfg(target_arch = "x86_64")]
@@ -555,9 +558,9 @@ mod test {
         let enc = AesSafe128EncryptorX8::new(key);
         let dec = AesSafe128DecryptorX8::new(key);
         let mut tmp = [0u8, ..128];
-        enc.encrypt_block(plain, tmp);
+        enc.encrypt_block_x8(plain, tmp);
         assert!(tmp == cipher);
-        dec.decrypt_block(cipher, tmp);
+        dec.decrypt_block_x8(cipher, tmp);
         assert!(tmp == plain);
     }
 }
@@ -579,12 +582,12 @@ mod bench {
         // Safe (S-boxes bitspliced only; not working): 6 MB/s
         // Safe (bs) - 10 MB/s!
 
-        let a = AesSafe128Decryptor::new(key);
+        let a = AesSafe128Encryptor::new(key);
 
         let mut tmp = [0u8, ..16];
 
         do bh.iter {
-            a.decrypt_block(plain, tmp);
+            a.encrypt_block(plain, tmp);
         }
 
         bh.bytes = (plain.len()) as u64;
@@ -595,12 +598,12 @@ mod bench {
         let key: [u8, ..16] = [1u8, ..16];
         let plain: [u8, ..128] = [2u8, ..128];
 
-        let a = AesSafe128DecryptorX8::new(key);
+        let a = AesSafe128EncryptorX8::new(key);
 
         let mut tmp = [0u8, ..128];
 
         do bh.iter {
-            a.decrypt_block(plain, tmp);
+            a.encrypt_block_x8(plain, tmp);
         }
 
         // HACK: Multiply by 100 to get fractional MB/s reported

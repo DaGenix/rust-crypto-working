@@ -131,8 +131,7 @@ use std::iter::range_step;
 use std::num::Zero;
 
 use cryptoutil::*;
-use symmetriccipher::*;
-
+use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, BlockDecryptor, BlockDecryptorX8};
 
 // FIXME - #XXXX: Using std::unstable::simd::u32x4 results in issues creating static arrays of u32x4
 // values. Defining the type here avoids that problem.
@@ -140,12 +139,10 @@ use symmetriccipher::*;
 #[deriving(Clone, Eq)]
 pub struct u32x4(u32, u32, u32, u32);
 
-
 // There are a variety of places where we need to use u32x4 types with either all bits set or not
 // bits set. These macros make that more succinct.
 macro_rules! o( () => ( u32x4(0, 0, 0, 0) ) )
 macro_rules! x( () => ( u32x4(-1, -1, -1, -1) ) )
-
 
 macro_rules! define_aes_struct(
     (
@@ -232,7 +229,6 @@ define_aes_impl!(AesSafe256Decryptor, Decryption, 14, 32)
 define_aes_enc!(AesSafe256Encryptor, 14)
 define_aes_dec!(AesSafe256Decryptor, 14)
 
-
 macro_rules! define_aes_struct_x8(
     (
         $name:ident,
@@ -276,8 +272,8 @@ macro_rules! define_aes_enc_x8(
         $name:ident,
         $rounds:expr
     ) => (
-        impl BlockEncryptor for $name {
-            fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
+        impl BlockEncryptorX8 for $name {
+            fn encrypt_block_x8(&self, input: &[u8], output: &mut [u8]) {
                 let bs = bit_slice_1x128_with_u32x4(input);
                 let bs2 = encrypt_core(&bs, self.sk);
                 un_bit_slice_1x128_with_u32x4(&bs2, output);
@@ -291,8 +287,8 @@ macro_rules! define_aes_dec_x8(
         $name:ident,
         $rounds:expr
     ) => (
-        impl BlockDecryptor for $name {
-            fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
+        impl BlockDecryptorX8 for $name {
+            fn decrypt_block_x8(&self, input: &[u8], output: &mut [u8]) {
                 let bs = bit_slice_1x128_with_u32x4(input);
                 let bs2 = decrypt_core(&bs, self.sk);
                 un_bit_slice_1x128_with_u32x4(&bs2, output);
@@ -321,7 +317,6 @@ define_aes_impl_x8!(AesSafe256EncryptorX8, Encryption, 14, 32)
 define_aes_impl_x8!(AesSafe256DecryptorX8, Decryption, 14, 32)
 define_aes_enc_x8!(AesSafe256EncryptorX8, 14)
 define_aes_dec_x8!(AesSafe256DecryptorX8, 14)
-
 
 fn rotate(r: u32, rotate: u32) -> u32 {
     return (r >> rotate) | (r << (32 - rotate));
@@ -404,7 +399,6 @@ fn create_round_keys(key: &[u8], key_type: KeyType, round_keys: &mut [[u32, ..4]
     }
 }
 
-
 // This trait defines all of the operations needed for a type to be processed as part of an AES
 // encryption or decryption operation.
 trait AesOps {
@@ -416,7 +410,6 @@ trait AesOps {
     fn inv_mix_columns(&self) -> Self;
     fn add_round_key(&self, rk: &Self) -> Self;
 }
-
 
 fn encrypt_core<S: AesOps>(state: &S, sk: &[S]) -> S {
     // Round 0 - add round key
@@ -478,7 +471,6 @@ impl <T: BitXor<T, T>> Bs8State<T> {
     }
 }
 
-
 struct Bs4State<T>(T, T, T, T);
 
 impl <T: Clone> Bs4State<T> {
@@ -503,7 +495,6 @@ impl <T: BitXor<T, T>> Bs4State<T> {
     }
 }
 
-
 struct Bs2State<T>(T, T);
 
 impl <T: Clone> Bs2State<T> {
@@ -526,7 +517,6 @@ impl <T: BitXor<T, T>> Bs2State<T> {
         return Bs2State(*a0 ^ *b0, *a1 ^ *b1);
     }
 }
-
 
 // Pick the specified bit from the value x and shift it left by the specified amount.
 fn pb(x: u32, bit: uint, shift: uint) -> u32 {
@@ -806,7 +796,6 @@ impl <T: BitXor<T, T> + BitAnd<T, T> + Clone> Gf2Ops for Bs2State<T> {
     }
 }
 
-
 // Operations in GF(2^4) using normal basis (alpha^8,alpha^2)
 trait Gf4Ops {
     // multiply
@@ -848,7 +837,6 @@ impl <T: BitXor<T, T> + BitAnd<T, T> + Clone> Gf4Ops for Bs4State<T> {
         return q.join(&p);
     }
 }
-
 
 // Operations in GF(2^8) using normal basis (d^16,d)
 trait Gf8Ops<T> {
@@ -985,7 +973,6 @@ impl <T: BitXor<T, T> + BitAnd<T, T> + Clone + Zero> Gf8Ops<T> for Bs8State<T> {
     }
 }
 
-
 impl <T: AesBitValueOps> AesOps for Bs8State<T> {
     fn sub_bytes(&self) -> Bs8State<T> {
         let nb: Bs8State<T> = self.change_basis(AesBitValueOps::a2x());
@@ -1090,7 +1077,6 @@ impl <T: AesBitValueOps> AesOps for Bs8State<T> {
     }
 }
 
-
 trait AesBitValueOps: BitXor<Self, Self> + BitAnd<Self, Self> + Clone + Zero {
     fn a2x() -> &'static [[Self, ..8], ..8];
     fn x2s() -> &'static [[Self, ..8], ..8];
@@ -1104,7 +1090,6 @@ trait AesBitValueOps: BitXor<Self, Self> + BitAnd<Self, Self> + Clone + Zero {
     fn ror2(&self) -> Self;
     fn ror3(&self) -> Self;
 }
-
 
 // Arrays to convert to and from a polynomial basis and a normal basis. The affine transformation
 // step is included in these matrices as well, so that doesn't have to be done seperately.
@@ -1193,7 +1178,6 @@ impl AesBitValueOps for u32 {
         ((*self >> 12) & 0x000f) | (*self << 4)
     }
 }
-
 
 impl u32x4 {
     fn lsh(&self, s: uint) -> u32x4 {

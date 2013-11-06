@@ -10,7 +10,7 @@
 
 use std::iter::range_step;
 
-use cryptoutil::{write_u32_le, read_u32v_le, FixedBuffer, FixedBuffer64, StandardPadding};
+use cryptoutil::{write_u32_le, read_u32v_le, FixedBuffer, StandardPadding};
 use digest::Digest;
 
 
@@ -156,26 +156,26 @@ static C4: [u32, ..16] = [
 
 
 /// The MD5 Digest algorithm
-pub struct Md5 {
+pub struct Md5<'self> {
     priv length_bytes: u64,
-    priv buffer: FixedBuffer64,
+    priv buffer: FixedBuffer<'self, [u8, ..64]>,
     priv state: Md5State,
     priv finished: bool,
 }
 
-impl Md5 {
+impl <'self> Md5<'self> {
     /// Construct a new instance of the MD5 Digest.
     pub fn new() -> Md5 {
         return Md5 {
             length_bytes: 0,
-            buffer: FixedBuffer64::new(),
+            buffer: FixedBuffer::new(),
             state: Md5State::new(),
             finished: false
         }
     }
 }
 
-impl Digest for Md5 {
+impl <'self> Digest for Md5<'self> {
     fn input(&mut self, input: &[u8]) {
         assert!(!self.finished);
         // Unlike Sha1 and Sha2, the length value in MD5 is defined as the length of the message mod

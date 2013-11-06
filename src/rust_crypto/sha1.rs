@@ -23,8 +23,7 @@
  */
 
 
-use cryptoutil::{write_u32_be, read_u32v_be, add_bytes_to_bits, FixedBuffer, FixedBuffer64,
-    StandardPadding};
+use cryptoutil::{write_u32_be, read_u32v_be, add_bytes_to_bits, FixedBuffer, StandardPadding};
 use digest::Digest;
 
 /*
@@ -42,10 +41,10 @@ static K2: u32 = 0x8F1BBCDCu32;
 static K3: u32 = 0xCA62C1D6u32;
 
 /// Structure representing the state of a Sha1 computation
-pub struct Sha1 {
+pub struct Sha1<'self> {
     priv h: [u32, ..DIGEST_BUF_LEN],
     priv length_bits: u64,
-    priv buffer: FixedBuffer64,
+    priv buffer: FixedBuffer<'self, [u8, ..64]>,
     priv computed: bool,
 }
 
@@ -144,13 +143,13 @@ fn mk_result(st: &mut Sha1, rs: &mut [u8]) {
     write_u32_be(rs.mut_slice(16, 20), st.h[4]);
 }
 
-impl Sha1 {
+impl <'self> Sha1<'self> {
     /// Construct a `sha` object
     pub fn new() -> Sha1 {
         let mut st = Sha1 {
             h: [0u32, ..DIGEST_BUF_LEN],
             length_bits: 0u64,
-            buffer: FixedBuffer64::new(),
+            buffer: FixedBuffer::new(),
             computed: false,
         };
         st.reset();
@@ -158,7 +157,7 @@ impl Sha1 {
     }
 }
 
-impl Digest for Sha1 {
+impl <'self> Digest for Sha1<'self> {
     fn reset(&mut self) {
         self.length_bits = 0;
         self.h[0] = 0x67452301u32;

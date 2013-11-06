@@ -276,153 +276,118 @@ pub fn add_bytes_to_bits_tuple
 }
 
 
+pub struct FixedBuffer<'self, B> {
+    buffer: B,
+    temp: Option<&'self B>,
+    buffer_idx: uint,
+}
+
+
 /// A FixedBuffer, likes its name implies, is a fixed size buffer. When the buffer becomes full, it
 /// must be processed. The input() method takes care of processing and then clearing the buffer
 /// automatically. However, other methods do not and require the caller to process the buffer. Any
 /// method that modifies the buffer directory or provides the caller with bytes that can be modifies
 /// results in those bytes being marked as used by the buffer.
-pub trait FixedBuffer {
+impl <'self, B: MutableVector<'self, u8> + ImmutableVector<'self, u8> + Container> FixedBuffer<'self, B> {
+    /// Create a new buffer
+    pub fn new() -> FixedBuffer<B> {
+        use std::unstable::intrinsics::uninit;
+        unsafe {
+            FixedBuffer {
+                buffer: uninit(),
+                temp: None,
+                buffer_idx: 0
+            }
+        }
+    }
+
     /// Input a vector of bytes. If the buffer becomes full, process it with the provided
     /// function and then clear the buffer.
-    fn input(&mut self, input: &[u8], func: &fn(&[u8]));
+    pub fn input(&mut self, input: &[u8], func: &fn(&[u8])) {
+        let mut i = 0;
+
+        let size = self.buffer.len();
+
+        // If there is already data in the buffer, copy as much as we can into it and process
+        // the data if the buffer becomes full.
+        if self.buffer_idx != 0 {
+            let buffer_remaining = size - self.buffer_idx;
+            if input.len() >= buffer_remaining {
+                    copy_memory(
+                        self.buffer.mut_slice(self.buffer_idx, size),
+                        input.slice_to(buffer_remaining),
+                        buffer_remaining);
+                self.buffer_idx = 0;
+                func(self.buffer.slice(0, self.buffer.len()));
+                i += buffer_remaining;
+            } else {
+                copy_memory(
+                    self.buffer.mut_slice(self.buffer_idx, self.buffer_idx + input.len()),
+                    input,
+                    input.len());
+                self.buffer_idx += input.len();
+                return;
+            }
+        }
+
+        // While we have at least a full buffer size chunks's worth of data, process that data
+        // without copying it into the buffer
+        while input.len() - i >= size {
+            func(input.slice(i, i + size));
+            i += size;
+        }
+
+        // Copy any input data into the buffer. At this point in the method, the ammount of
+        // data left in the input vector will be less than the buffer size and the buffer will
+        // be empty.
+        let input_remaining = input.len() - i;
+        copy_memory(
+            self.buffer.mut_slice(0, input_remaining),
+            input.slice_from(i),
+            input.len() - i);
+        self.buffer_idx += input_remaining;
+    }
 
     /// Reset the buffer.
-    fn reset(&mut self);
+    pub fn reset(&mut self) {
+        self.buffer_idx = 0;
+    }
 
     /// Zero the buffer up until the specified index. The buffer position currently must not be
     /// greater than that index.
-    fn zero_until(&mut self, idx: uint);
+    pub fn zero_until(&mut self, idx: uint) {
+        assert!(idx >= self.buffer_idx);
+        self.buffer.mut_slice(self.buffer_idx, idx).set_memory(0);
+        self.buffer_idx = idx;
+    }
 
     /// Get a slice of the buffer of the specified size. There must be at least that many bytes
     /// remaining in the buffer.
-    fn next<'s>(&'s mut self, len: uint) -> &'s mut [u8];
+    pub fn next<'s>(&'s mut self, len: uint) -> &'s mut [u8] {
+        self.buffer_idx += len;
+        return self.buffer.mut_slice(self.buffer_idx - len, self.buffer_idx);
+    }
 
     /// Get the current buffer. The buffer must already be full. This clears the buffer as well.
-    fn full_buffer<'s>(&'s mut self) -> &'s [u8];
+    pub fn full_buffer<'s>(&'s mut self) -> &'s [u8] {
+        let size = self.buffer.len();
+        assert!(self.buffer_idx == size);
+        self.buffer_idx = 0;
+        return self.buffer.slice_to(size);
+    }
 
     /// Get the current position of the buffer.
-    fn position(&self) -> uint;
+    pub fn position(&self) -> uint { self.buffer_idx }
 
     /// Get the number of bytes remaining in the buffer until it is full.
-    fn remaining(&self) -> uint;
+    pub fn remaining(&self) -> uint {
+        let size = self.buffer.len();
+        size - self.buffer_idx
+    }
 
     /// Get the size of the buffer
-    fn size(&self) -> uint;
+    pub fn size(&self) -> uint { self.buffer.len() }
 }
-
-macro_rules! impl_fixed_buffer( ($name:ident, $size:expr) => (
-    impl FixedBuffer for $name {
-        fn input(&mut self, input: &[u8], func: &fn(&[u8])) {
-            let mut i = 0;
-
-            // FIXME: #6304 - This local variable shouldn't be necessary.
-            let size = $size;
-
-            // If there is already data in the buffer, copy as much as we can into it and process
-            // the data if the buffer becomes full.
-            if self.buffer_idx != 0 {
-                let buffer_remaining = size - self.buffer_idx;
-                if input.len() >= buffer_remaining {
-                        copy_memory(
-                            self.buffer.mut_slice(self.buffer_idx, size),
-                            input.slice_to(buffer_remaining),
-                            buffer_remaining);
-                    self.buffer_idx = 0;
-                    func(self.buffer);
-                    i += buffer_remaining;
-                } else {
-                    copy_memory(
-                        self.buffer.mut_slice(self.buffer_idx, self.buffer_idx + input.len()),
-                        input,
-                        input.len());
-                    self.buffer_idx += input.len();
-                    return;
-                }
-            }
-
-            // While we have at least a full buffer size chunks's worth of data, process that data
-            // without copying it into the buffer
-            while input.len() - i >= size {
-                func(input.slice(i, i + size));
-                i += size;
-            }
-
-            // Copy any input data into the buffer. At this point in the method, the ammount of
-            // data left in the input vector will be less than the buffer size and the buffer will
-            // be empty.
-            let input_remaining = input.len() - i;
-            copy_memory(
-                self.buffer.mut_slice(0, input_remaining),
-                input.slice_from(i),
-                input.len() - i);
-            self.buffer_idx += input_remaining;
-        }
-
-        fn reset(&mut self) {
-            self.buffer_idx = 0;
-        }
-
-        fn zero_until(&mut self, idx: uint) {
-            assert!(idx >= self.buffer_idx);
-            self.buffer.mut_slice(self.buffer_idx, idx).set_memory(0);
-            self.buffer_idx = idx;
-        }
-
-        fn next<'s>(&'s mut self, len: uint) -> &'s mut [u8] {
-            self.buffer_idx += len;
-            return self.buffer.mut_slice(self.buffer_idx - len, self.buffer_idx);
-        }
-
-        fn full_buffer<'s>(&'s mut self) -> &'s [u8] {
-            assert!(self.buffer_idx == $size);
-            self.buffer_idx = 0;
-            return self.buffer.slice_to($size);
-        }
-
-        fn position(&self) -> uint { self.buffer_idx }
-
-        fn remaining(&self) -> uint { $size - self.buffer_idx }
-
-        fn size(&self) -> uint { $size }
-    }
-))
-
-
-/// A fixed size buffer of 64 bytes useful for cryptographic operations.
-pub struct FixedBuffer64 {
-    priv buffer: [u8, ..64],
-    priv buffer_idx: uint,
-}
-
-impl FixedBuffer64 {
-    /// Create a new buffer
-    pub fn new() -> FixedBuffer64 {
-        return FixedBuffer64 {
-            buffer: [0u8, ..64],
-            buffer_idx: 0
-        };
-    }
-}
-
-impl_fixed_buffer!(FixedBuffer64, 64)
-
-/// A fixed size buffer of 128 bytes useful for cryptographic operations.
-pub struct FixedBuffer128 {
-    priv buffer: [u8, ..128],
-    priv buffer_idx: uint,
-}
-
-impl FixedBuffer128 {
-    /// Create a new buffer
-    pub fn new() -> FixedBuffer128 {
-        return FixedBuffer128 {
-            buffer: [0u8, ..128],
-            buffer_idx: 0
-        };
-    }
-}
-
-impl_fixed_buffer!(FixedBuffer128, 128)
 
 
 /// The StandardPadding trait adds a method useful for various hash algorithms to a FixedBuffer
@@ -435,9 +400,9 @@ pub trait StandardPadding {
     fn standard_padding(&mut self, rem: uint, func: &fn(&[u8]));
 }
 
-impl <T: FixedBuffer> StandardPadding for T {
+impl <'self, B: MutableVector<'self, u8> + ImmutableVector<'self, u8> + Container> StandardPadding for FixedBuffer<'self, B> {
     fn standard_padding(&mut self, rem: uint, func: &fn(&[u8])) {
-        let size = self.size();
+        let size = self.buffer.len();
 
         self.next(1)[0] = 128;
 

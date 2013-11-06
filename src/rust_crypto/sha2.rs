@@ -11,7 +11,7 @@
 use std::iter::range_step;
 
 use cryptoutil::{write_u64_be, write_u32_be, read_u64v_be, read_u32v_be, add_bytes_to_bits,
-    add_bytes_to_bits_tuple, FixedBuffer, FixedBuffer128, FixedBuffer64, StandardPadding};
+    add_bytes_to_bits_tuple, FixedBuffer, StandardPadding};
 use digest::Digest;
 
 // A structure that represents that state of a digest computation for the SHA-2 512 family
@@ -180,18 +180,18 @@ static K64: [u64, ..80] = [
 
 // A structure that keeps track of the state of the Sha-512 operation and contains the logic
 // necessary to perform the final calculations.
-struct Engine512 {
+struct Engine512<'self> {
     length_bits: (u64, u64),
-    buffer: FixedBuffer128,
+    buffer: FixedBuffer<'self, [u8, ..128]>,
     state: Engine512State,
     finished: bool,
 }
 
-impl Engine512 {
+impl <'self> Engine512<'self> {
     fn new(h: &[u64, ..8]) -> Engine512 {
         return Engine512 {
             length_bits: (0, 0),
-            buffer: FixedBuffer128::new(),
+            buffer: FixedBuffer::new(),
             state: Engine512State::new(h),
             finished: false
         }
@@ -231,11 +231,11 @@ impl Engine512 {
 
 
 /// The SHA-512 hash algorithm
-pub struct Sha512 {
-    priv engine: Engine512
+pub struct Sha512<'self> {
+    priv engine: Engine512<'self>
 }
 
-impl Sha512 {
+impl <'self> Sha512<'self> {
     /**
      * Construct an new instance of a SHA-512 digest.
      */
@@ -246,7 +246,7 @@ impl Sha512 {
     }
 }
 
-impl Digest for Sha512 {
+impl <'self> Digest for Sha512<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }
@@ -286,11 +286,11 @@ static H512: [u64, ..8] = [
 
 
 /// The SHA-384 hash algorithm
-pub struct Sha384 {
-    priv engine: Engine512
+pub struct Sha384<'self> {
+    priv engine: Engine512<'self>
 }
 
-impl Sha384 {
+impl <'self> Sha384<'self> {
     /**
      * Construct an new instance of a SHA-384 digest.
      */
@@ -301,7 +301,7 @@ impl Sha384 {
     }
 }
 
-impl Digest for Sha384 {
+impl <'self> Digest for Sha384<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }
@@ -339,11 +339,11 @@ static H384: [u64, ..8] = [
 
 
 /// The SHA-512 hash algorithm with digest truncated to 256 bits
-pub struct Sha512Trunc256 {
-    priv engine: Engine512
+pub struct Sha512Trunc256<'self> {
+    priv engine: Engine512<'self>
 }
 
-impl Sha512Trunc256 {
+impl <'self> Sha512Trunc256<'self> {
     /**
      * Construct an new instance of a SHA-512/256 digest.
      */
@@ -354,7 +354,7 @@ impl Sha512Trunc256 {
     }
 }
 
-impl Digest for Sha512Trunc256 {
+impl <'self> Digest for Sha512Trunc256<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }
@@ -390,11 +390,11 @@ static H512_TRUNC_256: [u64, ..8] = [
 
 
 /// The SHA-512 hash algorithm with digest truncated to 224 bits
-pub struct Sha512Trunc224 {
-    priv engine: Engine512
+pub struct Sha512Trunc224<'self> {
+    priv engine: Engine512<'self>
 }
 
-impl Sha512Trunc224 {
+impl <'self> Sha512Trunc224<'self> {
     /**
      * Construct an new instance of a SHA-512/224 digest.
      */
@@ -405,7 +405,7 @@ impl Sha512Trunc224 {
     }
 }
 
-impl Digest for Sha512Trunc224 {
+impl <'self> Digest for Sha512Trunc224<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }
@@ -601,18 +601,18 @@ static K32: [u32, ..64] = [
 
 // A structure that keeps track of the state of the Sha-256 operation and contains the logic
 // necessary to perform the final calculations.
-struct Engine256 {
+struct Engine256<'self> {
     length_bits: u64,
-    buffer: FixedBuffer64,
+    buffer: FixedBuffer<'self, [u8, ..64]>,
     state: Engine256State,
     finished: bool,
 }
 
-impl Engine256 {
+impl <'self> Engine256<'self> {
     fn new(h: &[u32, ..8]) -> Engine256 {
         return Engine256 {
             length_bits: 0,
-            buffer: FixedBuffer64::new(),
+            buffer: FixedBuffer::new(),
             state: Engine256State::new(h),
             finished: false
         }
@@ -648,11 +648,11 @@ impl Engine256 {
 
 
 /// The SHA-256 hash algorithm
-pub struct Sha256 {
-    priv engine: Engine256
+pub struct Sha256<'self> {
+    priv engine: Engine256<'self>
 }
 
-impl Sha256 {
+impl <'self> Sha256<'self> {
     /**
      * Construct an new instance of a SHA-256 digest.
      */
@@ -663,7 +663,7 @@ impl Sha256 {
     }
 }
 
-impl Digest for Sha256 {
+impl <'self> Digest for Sha256<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }
@@ -703,11 +703,11 @@ static H256: [u32, ..8] = [
 
 
 /// The SHA-224 hash algorithm
-pub struct Sha224 {
-    priv engine: Engine256
+pub struct Sha224<'self> {
+    priv engine: Engine256<'self>
 }
 
-impl Sha224 {
+impl <'self> Sha224<'self> {
     /**
      * Construct an new instance of a SHA-224 digest.
      */
@@ -718,7 +718,7 @@ impl Sha224 {
     }
 }
 
-impl Digest for Sha224 {
+impl <'self> Digest for Sha224<'self> {
     fn input(&mut self, d: &[u8]) {
         self.engine.input(d);
     }

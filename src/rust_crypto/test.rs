@@ -14,6 +14,7 @@ pub mod aes;
 pub mod aesni;
 pub mod aessafe;
 pub mod blockmodes;
+pub mod buffer;
 mod cryptoutil;
 pub mod digest;
 pub mod hmac;

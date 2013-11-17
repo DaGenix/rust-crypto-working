@@ -4,6 +4,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use buffer::{RefReadBuffer, RefWriteBuffer, BufferResult};
+
 pub trait BlockEncryptor {
     fn encrypt_block(&self, input: &[u8], output: &mut [u8]);
 }
@@ -21,13 +23,13 @@ pub trait BlockDecryptorX8 {
 }
 
 pub trait Encryptor {
-    fn encrypt(&mut self, input: &[u8], handler: |&[u8]|);
-    fn encrypt_final(&mut self, input: &[u8], handler: |&[u8]|);
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer) -> BufferResult;
+    fn encrypt_final(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer) -> BufferResult;
 }
 
 pub trait Decryptor {
-    fn decrypt(&mut self, input: &[u8], handler: |&[u8]|);
-    fn decrypt_final(&mut self, input: &[u8], handler: |&[u8]|);
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer) -> BufferResult;
+    fn decrypt_final(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer) -> BufferResult;
 }
 
 pub trait SynchronousStreamCipher {

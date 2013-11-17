@@ -9,6 +9,7 @@
 // except according to those terms.
 
 use std::num::{One, Zero, CheckedAdd};
+use std::vec;
 use std::vec::bytes::{MutableByteVector, copy_memory};
 
 
@@ -396,6 +397,24 @@ macro_rules! impl_fixed_buffer( ($name:ident, $size:expr) => (
         fn size(&self) -> uint { $size }
     }
 ))
+
+
+pub struct FixedBufferHeap {
+    priv buffer: ~[u8],
+    priv buffer_idx: uint,
+}
+
+impl FixedBufferHeap {
+    /// Create a new buffer
+    pub fn new(size: uint) -> FixedBufferHeap {
+        return FixedBufferHeap {
+            buffer: vec::from_elem(size, 0u8),
+            buffer_idx: 0
+        };
+    }
+}
+
+impl_fixed_buffer!(FixedBufferHeap, self.buffer.len())
 
 
 /// A fixed size buffer of 16 bytes useful for cryptographic operations.

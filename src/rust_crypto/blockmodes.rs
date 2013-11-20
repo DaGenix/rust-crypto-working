@@ -82,18 +82,21 @@ impl BlockEngine {
             input: &mut R,
             output: &mut W,
             eof: bool,
-            func: |&[u8], &mut [u8], bool|) -> BufferResult {
+            func: |&[u8], &mut [u8], bool| -> uint) -> BufferResult {
         loop {
             match self.state {
                 NeedInput => {
                     loop {
+                        // TODO - convert to ChunkIter / zip?
+                        let cnt: uint;
                         match next_slices(self.block_size, input, output, eof) {
                             Some((slice_in, slice_out, no_more_input)) => {
                                 let last = eof && no_more_input;
-                                func(slice_in, slice_out, last);
+                                cnt = func(slice_in, slice_out, last);
                             }
                             None => break
                         }
+                        output.rewind(self.block_size - cnt);
                     }
                     if input.is_empty() {
                         if eof {
@@ -114,12 +117,14 @@ impl BlockEngine {
                     if self.in_buff.is_full() && (eof || has_more_input) {
                         // TODO - common function for this and Finishing state
                         // TODO - write directly to output if possible
+                        let cnt: uint;
                         {
                             let mut in_reader = self.in_buff.read_buffer();
                             let slice_in = in_reader.next(self.block_size);
                             let slice_out = out_write_buff.next(self.block_size);
-                            func(slice_in, slice_out, eof);
+                            cnt = func(slice_in, slice_out, eof);
                         }
+                        out_write_buff.rewind(self.block_size - cnt);
                         self.in_buff.reset();
                         self.out_read_buff = Some(out_write_buff.get_read_buffer());
                         self.state = NeedOutput;
@@ -159,12 +164,14 @@ impl BlockEngine {
                         let mut out_write_buff = self.out_write_buff.take_unwrap();
                         // TODO - common function for this and FillingIn state
                         // TODO - write directly to output if possible
+                        let cnt: uint;
                         {
                             let mut in_reader = self.in_buff.read_buffer();
                             let slice_in = in_reader.next(self.block_size);
                             let slice_out = out_write_buff.next(self.block_size);
-                            func(slice_in, slice_out, eof);
+                            cnt = func(slice_in, slice_out, eof);
                         }
+                        out_write_buff.rewind(self.block_size - cnt);
                         self.in_buff.reset();
                         self.out_read_buff = Some(out_write_buff.get_read_buffer());
                     }
@@ -203,8 +210,9 @@ impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
 impl <T: BlockEncryptor> Encryptor for EcbNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
             self.algo.encrypt_block(slice_in, slice_out);
+            self.algo.block_size()
         };
         let result = self.block_engine.process(input, output, eof, enc_fun);
         match (eof, result, self.block_engine.is_empty()) {
@@ -235,10 +243,11 @@ impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
 impl <T: BlockDecryptor> Decryptor for EcbNoPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+        let dec_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
             self.algo.decrypt_block(slice_in, slice_out);
+            self.algo.block_size()
         };
-        let result = self.block_engine.process(input, output, eof, enc_fun);
+        let result = self.block_engine.process(input, output, eof, dec_fun);
         match (eof, result, self.block_engine.is_empty()) {
             (true, BufferUnderflow, false) => {
                 fail!("NoPadding modes can only work on multiples of the block size.");
@@ -267,11 +276,12 @@ impl <T: BlockEncryptor> EcbPkcs7PaddingEncryptor<T> {
 impl <T: BlockEncryptor> Encryptor for EcbPkcs7PaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
             self.algo.encrypt_block(slice_in, slice_out);
+            self.algo.block_size()
         };
         let result = do self.block_engine.process(input, output, eof) |a, b, c| {
-            enc_fun(a, b, c);
+            enc_fun(a, b, c)
         };
         match (eof, result) {
             (true, BufferUnderflow) => {
@@ -282,11 +292,46 @@ impl <T: BlockEncryptor> Encryptor for EcbPkcs7PaddingEncryptor<T> {
                     }
                 }
                 return do self.block_engine.process(input, output, eof) |a, b, c| {
-                    enc_fun(a, b, c);
+                    enc_fun(a, b, c)
                 };
             }
             _ => return result
         }
+    }
+}
+
+pub struct EcbPkcs7PaddingDecryptor<T> {
+    priv algo: T,
+    priv block_engine: BlockEngine
+}
+
+impl <T: BlockDecryptor> EcbPkcs7PaddingDecryptor<T> {
+    pub fn new(algo: T) -> EcbPkcs7PaddingDecryptor<T> {
+        let block_size = algo.block_size();
+        EcbPkcs7PaddingDecryptor {
+            algo: algo,
+            block_engine: BlockEngine::new(block_size),
+        }
+    }
+}
+
+impl <T: BlockDecryptor> Decryptor for EcbPkcs7PaddingDecryptor<T> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> BufferResult {
+        let dec_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, last_block| {
+            self.algo.decrypt_block(slice_in, slice_out);
+            if last_block {
+                // TODO - verify all bytes!
+                let bs = self.algo.block_size();
+                bs - (slice_out[bs - 1] as uint)
+            } else {
+                self.algo.block_size()
+            }
+        };
+        let result = do self.block_engine.process(input, output, eof) |a, b, c| {
+            dec_fun(a, b, c)
+        };
+        return result
     }
 }
 
@@ -314,12 +359,13 @@ impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
 impl <T: BlockEncryptor> Encryptor for CbcNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
             for ((x, y), o) in self.temp1.iter().zip(slice_in.iter()).zip(self.temp2.mut_iter()) {
                 *o = *x ^ *y;
             }
             self.algo.encrypt_block(self.temp2, self.temp1);
             vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
+            self.algo.block_size()
         };
         let result = self.block_engine.process(input, output, eof, enc_fun);
         match (eof, result, self.block_engine.is_empty()) {
@@ -356,15 +402,16 @@ impl <T: BlockEncryptor> CbcPkcs7PaddingEncryptor<T> {
 impl <T: BlockEncryptor> Encryptor for CbcPkcs7PaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
             for ((x, y), o) in self.temp1.iter().zip(slice_in.iter()).zip(self.temp2.mut_iter()) {
                 *o = *x ^ *y;
             }
             self.algo.encrypt_block(self.temp2, self.temp1);
             vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
+            self.algo.block_size()
         };
         let result = do self.block_engine.process(input, output, eof) |a, b, c| {
-            enc_fun(a, b, c);
+            enc_fun(a, b, c)
         };
         match (eof, result) {
             (true, BufferUnderflow) => {
@@ -375,7 +422,7 @@ impl <T: BlockEncryptor> Encryptor for CbcPkcs7PaddingEncryptor<T> {
                     }
                 }
                 return do self.block_engine.process(input, output, true) |a, b, c| {
-                    enc_fun(a, b, c);
+                    enc_fun(a, b, c)
                 };
             }
             _ => return result
@@ -488,7 +535,8 @@ impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
 #[cfg(test)]
 mod test {
     use aessafe;
-    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor};
+    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcs7PaddingEncryptor,
+        EcbPkcs7PaddingDecryptor};
     use buffer::{RefReadBuffer, RefWriteBuffer};
     use symmetriccipher::{Encryptor, Decryptor};
 
@@ -623,6 +671,14 @@ mod test {
         (EcbNoPaddingEncryptor::new(aes_enc), EcbNoPaddingDecryptor::new(aes_dec))
     }
 
+    fn get_aes_ecb_pkcs_padding(test: &EcbTest)
+            -> (EcbPkcs7PaddingEncryptor<aessafe::AesSafe128Encryptor>,
+                EcbPkcs7PaddingDecryptor<aessafe::AesSafe128Decryptor>) {
+        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+        (EcbPkcs7PaddingEncryptor::new(aes_enc), EcbPkcs7PaddingDecryptor::new(aes_dec))
+    }
+
     fn run_test<T: CipherTest, E: Encryptor, D: Decryptor>(
             test: &T,
             enc: &mut E,
@@ -655,6 +711,15 @@ mod test {
         let tests = aes_ecb_no_padding_tests();
         for test in tests.iter() {
             let (mut enc, mut dec) = get_aes_ecb_no_padding(test);
+            run_test(test, &mut enc, &mut dec);
+        }
+    }
+
+    #[test]
+    fn aes_ecb_pkcs_padding() {
+        let tests = aes_ecb_pkcs_padding_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_ecb_pkcs_padding(test);
             run_test(test, &mut enc, &mut dec);
         }
     }

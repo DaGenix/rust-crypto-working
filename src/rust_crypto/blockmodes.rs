@@ -7,7 +7,7 @@
 use buffer::{ReadBuffer, WriteBuffer, RefReadBuffer, OwnedReadBuffer, RefWriteBuffer,
     OwnedWriteBuffer, BufferResult, BufferUnderflow, BufferOverflow};
 use cryptoutil::FixedBufferHeap;
-use symmetriccipher::{BlockEncryptor, Encryptor};
+use symmetriccipher::{BlockEncryptor, Encryptor, BlockDecryptor, Decryptor};
 
 use std::num;
 use std::vec;
@@ -63,7 +63,8 @@ impl BlockEngine {
     }
     fn is_empty(&self) -> bool {
         match self.state {
-            NeedInput => true,
+            // TODO - this seems awkward
+            AwaitingPadding | Finishing => true,
             _ => false
         }
     }
@@ -204,6 +205,38 @@ impl <T: BlockEncryptor> Encryptor for EcbNoPaddingEncryptor<T> {
             -> BufferResult {
         let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
             self.algo.encrypt_block(slice_in, slice_out);
+        };
+        let result = self.block_engine.process(input, output, eof, enc_fun);
+        match (eof, result, self.block_engine.is_empty()) {
+            (true, BufferUnderflow, false) => {
+                fail!("NoPadding modes can only work on multiples of the block size.");
+            }
+            _ => {}
+        }
+        return result;
+    }
+}
+
+pub struct EcbNoPaddingDecryptor<T> {
+    priv algo: T,
+    priv block_engine: BlockEngine
+}
+
+impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
+    pub fn new(algo: T) -> EcbNoPaddingDecryptor<T> {
+        let block_size = algo.block_size();
+        EcbNoPaddingDecryptor {
+            algo: algo,
+            block_engine: BlockEngine::new(block_size),
+        }
+    }
+}
+
+impl <T: BlockDecryptor> Decryptor for EcbNoPaddingDecryptor<T> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> BufferResult {
+        let enc_fun: |&[u8], &mut [u8], bool| = |slice_in, slice_out, _| {
+            self.algo.decrypt_block(slice_in, slice_out);
         };
         let result = self.block_engine.process(input, output, eof, enc_fun);
         match (eof, result, self.block_engine.is_empty()) {
@@ -374,7 +407,6 @@ fn test_ecb_no_padding() {
             BufferOverflow => fail!("Yikes")
         }
     }
-    print_hex(ciphertext);
 }
 
 #[test]
@@ -393,7 +425,6 @@ fn test_ecb_pkcs_padding() {
             BufferOverflow => fail!("Yikes")
         }
     }
-    print_hex(ciphertext);
 }
 
 #[test]
@@ -413,7 +444,6 @@ fn test_cbc_no_padding() {
             BufferOverflow => fail!("Yikes")
         }
     }
-    print_hex(ciphertext);
 }
 
 #[test]
@@ -433,7 +463,6 @@ fn test_cbc_pkcs_padding() {
             BufferOverflow => fail!("Yikes")
         }
     }
-    print_hex(ciphertext);
 }
 
 /*
@@ -456,7 +485,180 @@ impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
 
 
 
+#[cfg(test)]
+mod test {
+    use aessafe;
+    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor};
+    use buffer::{RefReadBuffer, RefWriteBuffer};
+    use symmetriccipher::{Encryptor, Decryptor};
 
+    use std::vec;
+
+    trait CipherTest {
+        fn get_plain<'a>(&'a self) -> &'a [u8];
+        fn get_cipher<'a>(&'a self) -> &'a [u8];
+    }
+
+    struct EcbTest {
+        key: ~[u8],
+        plain: ~[u8],
+        cipher: ~[u8]
+    }
+
+    impl CipherTest for EcbTest {
+        fn get_plain<'a>(&'a self) -> &'a [u8] {
+            self.plain.slice(0, self.plain.len())
+        }
+        fn get_cipher<'a>(&'a self) -> &'a [u8] {
+            self.cipher.slice(0, self.cipher.len())
+        }
+    }
+
+    struct CbcTest {
+        key: ~[u8],
+        iv: ~[u8],
+        plain: ~[u8],
+        cipher: ~[u8]
+    }
+
+    impl CipherTest for CbcTest {
+        fn get_plain<'a>(&'a self) -> &'a [u8] {
+            self.plain.slice(0, self.plain.len())
+        }
+        fn get_cipher<'a>(&'a self) -> &'a [u8] {
+            self.cipher.slice(0, self.cipher.len())
+        }
+    }
+
+    fn aes_ecb_no_padding_tests() -> ~[EcbTest] {
+        ~[
+            EcbTest {
+                key: ~[0, ..16],
+                plain: ~[0, ..32],
+                cipher: ~[
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e,
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e ]
+            }
+        ]
+    }
+
+    fn aes_ecb_pkcs_padding_tests() -> ~[EcbTest] {
+        ~[
+            EcbTest {
+                key: ~[0, ..16],
+                plain: ~[0, ..32],
+                cipher: ~[
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e,
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e,
+                    0x01, 0x43, 0xdb, 0x63, 0xee, 0x66, 0xb0, 0xcd,
+                    0xff, 0x9f, 0x69, 0x91, 0x76, 0x80, 0x15, 0x1e ]
+            },
+            EcbTest {
+                key: ~[0, ..16],
+                plain: ~[0, ..33],
+                cipher: ~[
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e,
+                    0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b,
+                    0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34, 0x2b, 0x2e,
+                    0x7a, 0xdc, 0x99, 0xb2, 0x9e, 0x82, 0xb1, 0xb2,
+                    0xb0, 0xa6, 0x5a, 0x38, 0xbc, 0x57, 0x8a, 0x01 ]
+            }
+        ]
+    }
+
+    fn aes_cbc_no_padding_tests() -> ~[CbcTest] {
+        ~[
+            CbcTest {
+                key: ~[0, ..16],
+                iv: ~[0, ..16],
+                plain: ~[0, ..32],
+                cipher: ~[
+                    0x72, 0xe1, 0x63, 0xaf, 0x20, 0x38, 0x29, 0x1e,
+                    0x91, 0x1f, 0x86, 0xbb, 0x48, 0xca, 0xa9, 0x68,
+                    0x35, 0x01, 0xbc, 0x97, 0x4d, 0x74, 0xc5, 0x07,
+                    0xb8, 0x19, 0x67, 0x5e, 0x0b, 0x2d, 0xb8, 0xe3 ]
+            }
+        ]
+    }
+
+    fn aes_cbc_pkcs_padding_tests() -> ~[CbcTest] {
+        ~[
+            CbcTest {
+                key: ~[0, ..16],
+                iv: ~[0, ..16],
+                plain: ~[0, ..32],
+                cipher: ~[
+                    0x79, 0xf2, 0x17, 0x8e, 0x3a, 0xcc, 0x12, 0xa2,
+                    0x37, 0x3e, 0x99, 0xbc, 0x32, 0xb6, 0x9e, 0xfe,
+                    0xef, 0x09, 0x08, 0x02, 0xc1, 0xa9, 0x28, 0x72,
+                    0xc5, 0x4d, 0x50, 0xd2, 0x63, 0x5b, 0x91, 0xf5,
+                    0xa0, 0x69, 0x8f, 0x4c, 0x25, 0x48, 0xab, 0x09,
+                    0xd6, 0x2d, 0xab, 0x35, 0xd2, 0x40, 0xa7, 0x89 ]
+            },
+            CbcTest {
+                key: ~[0, ..16],
+                iv: ~[0, ..16],
+                plain: ~[0, ..33],
+                cipher: ~[
+                    0x84, 0xd9, 0x09, 0x97, 0x8e, 0xb4, 0x93, 0xa4,
+                    0x9c, 0x74, 0xf1, 0xa9, 0xf1, 0x79, 0x20, 0xda,
+                    0xd6, 0x05, 0x89, 0xf4, 0x43, 0x64, 0xfd, 0x3b,
+                    0x49, 0x75, 0x7d, 0xc1, 0x63, 0x0a, 0xc3, 0x87,
+                    0x5d, 0x46, 0x4a, 0xea, 0xaa, 0x9a, 0x0d, 0x17,
+                    0x8a, 0xc1, 0x25, 0x59, 0x4c, 0x1e, 0xf6, 0x99 ]
+            }
+        ]
+    }
+
+    fn get_aes_ecb_no_padding(test: &EcbTest)
+            -> (EcbNoPaddingEncryptor<aessafe::AesSafe128Encryptor>,
+                EcbNoPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
+        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+        (EcbNoPaddingEncryptor::new(aes_enc), EcbNoPaddingDecryptor::new(aes_dec))
+    }
+
+    fn run_test<T: CipherTest, E: Encryptor, D: Decryptor>(
+            test: &T,
+            enc: &mut E,
+            dec: &mut D) {
+        let mut cipher_out = vec::from_elem(test.get_cipher().len(), 0u8);
+        {
+            let mut buff_in = RefReadBuffer::new(test.get_plain());
+            let mut buff_out = RefWriteBuffer::new(cipher_out);
+            match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                BufferOverflow => fail!("Encryption not completed"),
+                _ => {}
+            }
+        }
+        assert!(test.get_cipher() == cipher_out);
+
+        let mut plain_out = vec::from_elem(test.get_plain().len(), 0u8);
+        {
+            let mut buff_in = RefReadBuffer::new(test.get_cipher());
+            let mut buff_out = RefWriteBuffer::new(plain_out);
+            match dec.decrypt(&mut buff_in, &mut buff_out, true) {
+                BufferOverflow => fail!("Decryption not completed"),
+                _ => {}
+            }
+        }
+        assert!(test.get_plain() == plain_out);
+    }
+
+    #[test]
+    fn aes_ecb_no_padding() {
+        let tests = aes_ecb_no_padding_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_ecb_no_padding(test);
+            run_test(test, &mut enc, &mut dec);
+        }
+    }
+}
 
 
 

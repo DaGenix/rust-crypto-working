@@ -151,11 +151,6 @@ impl OwnedWriteBuffer {
     pub fn reset(&mut self) {
         self.pos = 0;
     }
-//     pub fn clone_as_read_buffer(&self) -> OwnedReadBuffer {
-//         let mut nb = vec::from_elem(self.pos, 0u8);
-//         vec::bytes::copy_memory(nb, self.buff, self.pos);
-//         OwnedReadBuffer::new(nb)
-//     }
     pub fn get_read_buffer(self) -> OwnedReadBuffer {
         let pos = self.pos;
         OwnedReadBuffer::new_with_len(self.buff, pos)
@@ -173,7 +168,6 @@ impl WriteBuffer for OwnedWriteBuffer {
         self.pos == self.len
     }
     fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8] {
-        println!("pos: {}, size: {}, remaining: {}", self.pos, size, self.remaining());
         let s = self.buff.mut_slice(self.pos, self.pos + size);
         self.pos += size;
         s

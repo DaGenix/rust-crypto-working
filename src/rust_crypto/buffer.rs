@@ -4,59 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/*
-pub enum BufferResult {
-    BufferUnderflow,
-    BufferOverflow
-}
-
-pub struct Buffer<'self> {
-    buff: &'self [u8]
-}
-
-impl <'self> Buffer<'self> {
-    pub fn new<'a>(buff: &'a [u8]) -> Buffer<'a> {
-        Buffer {
-            buff: buff
-        }
-    }
-    pub fn remaining(&self) -> uint {
-        self.buff.len()
-    }
-    pub fn next_slice(&mut self, size: uint) -> &'self [u8] {
-        let s = self.buff.slice_to(size);
-        let r = self.buff.slice_from(size);
-        self.buff = r;
-        s
-    }
-}
-
-pub struct MutBuffer<'self> {
-    buff: &'self mut [u8],
-    len: uint,
-    pos: uint
-}
-
-impl <'self> MutBuffer<'self> {
-    pub fn new<'a>(buff: &'a mut [u8]) -> MutBuffer<'a> {
-        let len = buff.len();
-        MutBuffer {
-            buff: buff,
-            len: len,
-            pos: 0
-        }
-    }
-    pub fn remaining(&self) -> uint {
-        self.len - self.pos
-    }
-    pub fn next_slice(&mut self, size: uint) -> &'self mut [u8] {
-        let s = self.buff.mut_slice(self.pos, self.pos + size);
-        self.pos += size;
-        s
-    }
-}
-*/
-
+use std::vec;
 
 pub enum BufferResult {
     BufferUnderflow,
@@ -67,7 +15,6 @@ pub trait ReadBuffer {
     fn remaining(&self) -> uint;
     fn is_empty(&self) -> bool;
     fn next<'a>(&'a mut self, size: uint) -> &'a [u8];
-    fn all<'a>(&'a mut self) -> &'a [u8];
 }
 
 pub trait WriteBuffer {
@@ -103,10 +50,49 @@ impl <'self> ReadBuffer for RefReadBuffer<'self> {
         self.buff = r;
         s
     }
-    fn all<'a>(&'a mut self) -> &'a [u8] {
-        self.buff
+}
+
+pub struct OwnedReadBuffer {
+    buff: ~[u8],
+    len: uint,
+    pos: uint
+}
+
+impl OwnedReadBuffer {
+    pub fn new(buff: ~[u8]) -> OwnedReadBuffer {
+        let len = buff.len();
+        OwnedReadBuffer {
+            buff: buff,
+            len: len,
+            pos: 0
+        }
+    }
+    pub fn new_with_len<'a>(buff: ~[u8], len: uint) -> OwnedReadBuffer {
+        OwnedReadBuffer {
+            buff: buff,
+            len: len,
+            pos: 0
+        }
+    }
+    pub fn get_write_buffer(self) -> OwnedWriteBuffer {
+        OwnedWriteBuffer::new(self.buff)
     }
 }
+
+impl ReadBuffer for OwnedReadBuffer {
+    fn remaining(&self) -> uint {
+        self.len - self.pos
+    }
+    fn is_empty(&self) -> bool {
+        self.pos == self.len
+    }
+    fn next<'a>(&'a mut self, size: uint) -> &'a [u8] {
+        let s = self.buff.slice(self.pos, self.pos + size);
+        self.pos += size;
+        s
+    }
+}
+
 
 pub struct RefWriteBuffer<'self> {
     buff: &'self mut [u8],
@@ -164,6 +150,15 @@ impl OwnedWriteBuffer {
     }
     pub fn reset(&mut self) {
         self.pos = 0;
+    }
+//     pub fn clone_as_read_buffer(&self) -> OwnedReadBuffer {
+//         let mut nb = vec::from_elem(self.pos, 0u8);
+//         vec::bytes::copy_memory(nb, self.buff, self.pos);
+//         OwnedReadBuffer::new(nb)
+//     }
+    pub fn get_read_buffer(self) -> OwnedReadBuffer {
+        let pos = self.pos;
+        OwnedReadBuffer::new_with_len(self.buff, pos)
     }
 }
 

@@ -7,18 +7,22 @@
 use buffer::{ReadBuffer, WriteBuffer, BufferResult};
 
 pub trait BlockEncryptor {
+    fn block_size(&self) -> uint;
     fn encrypt_block(&self, input: &[u8], output: &mut [u8]);
 }
 
 pub trait BlockEncryptorX8 {
+    fn block_size(&self) -> uint;
     fn encrypt_block_x8(&self, input: &[u8], output: &mut [u8]);
 }
 
 pub trait BlockDecryptor {
+    fn block_size(&self) -> uint;
     fn decrypt_block(&self, input: &[u8], output: &mut [u8]);
 }
 
 pub trait BlockDecryptorX8 {
+    fn block_size(&self) -> uint;
     fn decrypt_block_x8(&self, input: &[u8], output: &mut [u8]);
 }
 

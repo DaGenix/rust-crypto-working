@@ -191,9 +191,10 @@ pub struct EcbNoPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
     pub fn new(algo: T) -> EcbNoPaddingEncryptor<T> {
+        let block_size = algo.block_size();
         EcbNoPaddingEncryptor {
             algo: algo,
-            block_engine: BlockEngine::new(16),
+            block_engine: BlockEngine::new(block_size),
         }
     }
 }
@@ -222,9 +223,10 @@ pub struct EcbPkcs7PaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> EcbPkcs7PaddingEncryptor<T> {
     pub fn new(algo: T) -> EcbPkcs7PaddingEncryptor<T> {
+        let block_size = algo.block_size();
         EcbPkcs7PaddingEncryptor {
             algo: algo,
-            block_engine: BlockEngine::new(16),
+            block_engine: BlockEngine::new(block_size),
         }
     }
 }
@@ -264,13 +266,14 @@ pub struct CbcNoPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
     pub fn new(algo: T, iv: &[u8]) -> CbcNoPaddingEncryptor<T> {
-        let mut temp1 = vec::from_elem(16, 0u8);
-        vec::bytes::copy_memory(temp1, iv, 16);
+        let block_size = algo.block_size();
+        let mut temp1 = vec::from_elem(block_size, 0u8);
+        vec::bytes::copy_memory(temp1, iv, block_size);
         CbcNoPaddingEncryptor {
             algo: algo,
-            block_engine: BlockEngine::new(16),
+            block_engine: BlockEngine::new(block_size),
             temp1: temp1,
-            temp2: vec::from_elem(16, 0u8)
+            temp2: vec::from_elem(block_size, 0u8)
         }
     }
 }
@@ -283,7 +286,7 @@ impl <T: BlockEncryptor> Encryptor for CbcNoPaddingEncryptor<T> {
                 *o = *x ^ *y;
             }
             self.algo.encrypt_block(self.temp2, self.temp1);
-            vec::bytes::copy_memory(slice_out, self.temp1, 16);
+            vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
         };
         let result = self.block_engine.process(input, output, eof, enc_fun);
         match (eof, result, self.block_engine.is_empty()) {
@@ -305,13 +308,14 @@ pub struct CbcPkcs7PaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> CbcPkcs7PaddingEncryptor<T> {
     pub fn new(algo: T, iv: &[u8]) -> CbcPkcs7PaddingEncryptor<T> {
-        let mut temp1 = vec::from_elem(16, 0u8);
-        vec::bytes::copy_memory(temp1, iv, 16);
+        let block_size = algo.block_size();
+        let mut temp1 = vec::from_elem(block_size, 0u8);
+        vec::bytes::copy_memory(temp1, iv, block_size);
         CbcPkcs7PaddingEncryptor {
             algo: algo,
-            block_engine: BlockEngine::new(16),
+            block_engine: BlockEngine::new(block_size),
             temp1: temp1,
-            temp2: vec::from_elem(16, 0u8)
+            temp2: vec::from_elem(block_size, 0u8)
         }
     }
 }
@@ -324,7 +328,7 @@ impl <T: BlockEncryptor> Encryptor for CbcPkcs7PaddingEncryptor<T> {
                 *o = *x ^ *y;
             }
             self.algo.encrypt_block(self.temp2, self.temp1);
-            vec::bytes::copy_memory(slice_out, self.temp1, 16);
+            vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
         };
         let result = do self.block_engine.process(input, output, eof) |a, b, c| {
             enc_fun(a, b, c);

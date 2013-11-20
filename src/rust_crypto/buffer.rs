@@ -21,6 +21,7 @@ pub trait WriteBuffer {
     fn remaining(&self) -> uint;
     fn is_empty(&self) -> bool;
     fn is_full(&self) -> bool;
+    fn rewind(&mut self, cnt: uint);
     fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8];
     fn read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a>;
 }
@@ -121,6 +122,9 @@ impl <'self> WriteBuffer for RefWriteBuffer<'self> {
     fn is_full(&self) -> bool {
         self.pos == self.len
     }
+    fn rewind(&mut self, cnt: uint) {
+        self.pos -= cnt;
+    }
     fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8] {
         let s = self.buff.mut_slice(self.pos, self.pos + size);
         self.pos += size;
@@ -166,6 +170,9 @@ impl WriteBuffer for OwnedWriteBuffer {
     }
     fn is_full(&self) -> bool {
         self.pos == self.len
+    }
+    fn rewind(&mut self, cnt: uint) {
+        self.pos -= cnt;
     }
     fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8] {
         let s = self.buff.mut_slice(self.pos, self.pos + size);

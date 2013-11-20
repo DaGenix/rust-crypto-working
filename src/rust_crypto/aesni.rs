@@ -35,12 +35,14 @@ impl AesNi128Decryptor {
 }
 
 impl BlockEncryptor for AesNi128Encryptor {
+    fn block_size(&self) -> uint { 16 }
     fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
         encrypt_block_aseni(10, input, self.round_keys, output);
     }
 }
 
 impl BlockDecryptor for AesNi128Decryptor {
+    fn block_size(&self) -> uint { 16 }
     fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
         decrypt_block_aseni(10, input, self.round_keys, output);
     }
@@ -75,12 +77,14 @@ impl AesNi192Decryptor {
 }
 
 impl BlockEncryptor for AesNi192Encryptor {
+    fn block_size(&self) -> uint { 16 }
     fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
         encrypt_block_aseni(12, input, self.round_keys, output);
     }
 }
 
 impl BlockDecryptor for AesNi192Decryptor {
+    fn block_size(&self) -> uint { 16 }
     fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
         decrypt_block_aseni(12, input, self.round_keys, output);
     }
@@ -115,12 +119,14 @@ impl AesNi256Decryptor {
 }
 
 impl BlockEncryptor for AesNi256Encryptor {
+    fn block_size(&self) -> uint { 16 }
     fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
         encrypt_block_aseni(14, input, self.round_keys, output);
     }
 }
 
 impl BlockDecryptor for AesNi256Decryptor {
+    fn block_size(&self) -> uint { 16 }
     fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
         decrypt_block_aseni(14, input, self.round_keys, output);
     }

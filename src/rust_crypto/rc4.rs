@@ -116,9 +116,9 @@ mod bench {
         let mut rc4 = Rc4::new("key".as_bytes());
         let input = [1u8, ..10];
         let mut output = [0u8, ..10];
-        do bh.iter {
+        bh.iter( || {
             rc4.process(input, output);
-        }
+        });
         bh.bytes = input.len() as u64;
     }
 
@@ -127,9 +127,9 @@ mod bench {
         let mut rc4 = Rc4::new("key".as_bytes());
         let input = [1u8, ..1024];
         let mut output = [0u8, ..1024];
-        do bh.iter {
+        bh.iter( || {
             rc4.process(input, output);
-        }
+        });
         bh.bytes = input.len() as u64;
     }
 
@@ -138,9 +138,9 @@ mod bench {
         let mut rc4 = Rc4::new("key".as_bytes());
         let input = [1u8, ..65536];
         let mut output = [0u8, ..65536];
-        do bh.iter {
+        bh.iter( || {
             rc4.process(input, output);
-        }
+        });
         bh.bytes = input.len() as u64;
     }
 }

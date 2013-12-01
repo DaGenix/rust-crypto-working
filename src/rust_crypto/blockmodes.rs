@@ -12,10 +12,159 @@ use symmetriccipher::{BlockEncryptor, Encryptor, BlockDecryptor, Decryptor};
 use std::num;
 use std::vec;
 
+enum BlockEngineState {
+    ScratchEmpty,
+    NeedInput,
+    NeedOutput
+}
+
+struct BlockEngine {
+    in_size: uint,
+    out_size: uint,
+    hist_size: uint,
+    in_scratch: OwnedWriteBuffer,
+    out_write_scratch: Option<OwnedWriteBuffer>,
+    out_read_scratch: Option<OwnedReadBuffer>,
+    hist_scratch: ~[u8],
+    state: BlockEngineState
+}
+
 fn push<R: ReadBuffer, W: WriteBuffer>(input: &mut R, output: &mut W) {
     let size = num::min(output.remaining(), input.remaining());
     vec::bytes::copy_memory(output.next(size), input.next(size), size);
 }
+
+impl BlockEngine {
+    fn new(in_size: uint, out_size: uint) -> BlockEngine {
+        BlockEngine {
+            in_size: in_size,
+            out_size: out_size,
+            hist_size: 0,
+            in_scratch: OwnedWriteBuffer::new(vec::from_elem(in_size, 0u8)),
+            out_write_scratch: Some(OwnedWriteBuffer::new(vec::from_elem(out_size, 0u8))),
+            out_read_scratch: None,
+            hist_scratch: ~[],
+            state: ScratchEmpty
+        }
+    }
+    fn new_with_history(in_size: uint, out_size: uint, hist: &[u8]) -> BlockEngine {
+        BlockEngine {
+            hist_size: hist.len(),
+            hist_scratch: hist.to_owned(),
+            ..BlockEngine::new(in_size, out_size)
+        }
+    }
+    fn enough_space<R: ReadBuffer, W: WriteBuffer>(
+        &self,
+        input: &R,
+        output: &W,
+        eof: bool
+        ) -> bool {
+        let last_full_block = input.remaining() == self.in_size && eof;
+        let more_input = input.remaining() > self.in_size;
+        let enough_input = more_input || last_full_block;
+        let enough_output = output.remaining() >= self.out_size;
+        if enough_input && enough_output {
+            true
+        } else {
+            false
+        }
+    }
+    fn run_func<R: ReadBuffer, W: WriteBuffer>(
+            &mut self,
+            input: &mut R,
+            output: &mut W,
+            eof: bool,
+            func: |&[u8], &mut [u8], &[u8]|,
+            last_sizer: |&[u8]| -> uint) {
+        let mut rewind: uint = 0;
+        loop {
+            let last_full_block = input.remaining() == self.in_size && eof;
+            let more_input = input.remaining() > self.in_size;
+            let enough_input = more_input || last_full_block;
+            let enough_output = output.remaining() >= self.out_size;
+            if enough_input && enough_output {
+                let next_in = input.next(self.in_size);
+                let next_out = output.next(self.out_size);
+                func(next_in, next_out, self.hist_scratch.as_slice());
+                vec::bytes::copy_memory(
+                    self.hist_scratch,
+                    next_in.slice_from(self.in_size - self.hist_size),
+                    self.hist_size);
+                if last_full_block {
+                    let sz = last_sizer(next_out);
+                    rewind = self.out_size - sz;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        output.rewind(rewind);
+    }
+    fn process<R: ReadBuffer, W: WriteBuffer>(
+            &mut self,
+            input: &mut R,
+            output: &mut W,
+            eof: bool,
+            func: |&[u8], &mut [u8], &[u8]|,
+            last_sizer: |&[u8]| -> uint) -> BufferResult {
+        loop {
+            match self.state {
+                ScratchEmpty => {
+                    self.run_func(
+                        input,
+                        output,
+                        eof,
+                        |a, b, c| func(a, b, c),
+                        |a| last_sizer(a));
+                    if !input.is_empty() {
+                        self.state = NeedInput;
+                    } else {
+                        return BufferUnderflow;
+                    }
+                }
+                NeedInput => {
+                    push(input, &mut self.in_scratch);
+                    if self.in_scratch.is_full() {
+                        let mut rin = self.in_scratch.read_buffer();
+                        let mut wout = self.out_write_scratch.take_unwrap();
+                        self.run_func(
+                            &mut rin,
+                            &mut wout,
+                            eof,
+                            |a, b, c| func(a, b, c),
+                            |a| last_sizer(a));
+                        self.out_read_scratch = Some(wout.get_read_buffer());
+                        self.state = NeedOutput;
+                    } else {
+                        return BufferUnderflow;
+                    }
+                }
+                NeedOutput => {
+                    let mut rout = self.out_read_scratch.take_unwrap();
+                    push(&mut rout, output);
+                    if rout.is_empty() {
+                        self.out_write_scratch = Some(rout.get_write_buffer());
+                        self.state = ScratchEmpty;
+                    } else {
+                        self.out_read_scratch = Some(rout);
+                        return BufferOverflow;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
+
+/*
+
+
+
 
 fn next_slices<'a, R: ReadBuffer, W: WriteBuffer>(
         block_size: uint,
@@ -512,6 +661,20 @@ fn test_cbc_pkcs_padding() {
     }
 }
 
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
 /*
 impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
     fn encrypt(&mut self, input: &mut Buffer, output: &mut MutBuffer) -> BufferResult {
@@ -532,7 +695,7 @@ impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
 
 
 
-#[cfg(test)]
+#[cfg(test_OFF)]
 mod test {
     use aessafe;
     use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcs7PaddingEncryptor,

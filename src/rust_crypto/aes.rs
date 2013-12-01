@@ -586,9 +586,9 @@ mod bench {
 
         let mut tmp = [0u8, ..16];
 
-        do bh.iter {
+        bh.iter( || {
             a.encrypt_block(plain, tmp);
-        }
+        });
 
         bh.bytes = (plain.len()) as u64;
     }
@@ -602,9 +602,9 @@ mod bench {
 
         let mut tmp = [0u8, ..128];
 
-        do bh.iter {
+        bh.iter( || {
             a.encrypt_block_x8(plain, tmp);
-        }
+        });
 
         // HACK: Multiply by 100 to get fractional MB/s reported
         bh.bytes = (plain.len() * 100) as u64;

@@ -12,13 +12,19 @@ use symmetriccipher::{BlockEncryptor, Encryptor, BlockDecryptor, Decryptor};
 use std::num;
 use std::vec;
 
+trait BlockProcessor {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]);
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
+    fn last_output<W: WriteBuffer>(&mut self, output_buffer: &mut W) { }
+}
+
 enum BlockEngineState {
     ScratchEmpty,
     NeedInput,
     NeedOutput
 }
 
-struct BlockEngine {
+struct BlockEngine<P> {
     in_size: uint,
     out_size: uint,
     hist_size: uint,
@@ -26,16 +32,12 @@ struct BlockEngine {
     out_write_scratch: Option<OwnedWriteBuffer>,
     out_read_scratch: Option<OwnedReadBuffer>,
     hist_scratch: ~[u8],
+    processor: P,
     state: BlockEngineState
 }
 
-fn push<R: ReadBuffer, W: WriteBuffer>(input: &mut R, output: &mut W) {
-    let size = num::min(output.remaining(), input.remaining());
-    vec::bytes::copy_memory(output.next(size), input.next(size), size);
-}
-
-impl BlockEngine {
-    fn new(in_size: uint, out_size: uint) -> BlockEngine {
+impl <P: BlockProcessor> BlockEngine<P> {
+    fn new(processor: P, in_size: uint, out_size: uint) -> BlockEngine<P> {
         BlockEngine {
             in_size: in_size,
             out_size: out_size,
@@ -44,115 +46,181 @@ impl BlockEngine {
             out_write_scratch: Some(OwnedWriteBuffer::new(vec::from_elem(out_size, 0u8))),
             out_read_scratch: None,
             hist_scratch: ~[],
+            processor: processor,
             state: ScratchEmpty
         }
     }
-    fn new_with_history(in_size: uint, out_size: uint, hist: &[u8]) -> BlockEngine {
+    fn new_with_history(
+            processor: P,
+            in_size: uint,
+            out_size: uint,
+            initial_hist: ~[u8]) -> BlockEngine<P> {
         BlockEngine {
-            hist_size: hist.len(),
-            hist_scratch: hist.to_owned(),
-            ..BlockEngine::new(in_size, out_size)
+            hist_size: initial_hist.len(),
+            hist_scratch: initial_hist,
+            ..BlockEngine::new(processor, in_size, out_size)
         }
     }
-    fn enough_space<R: ReadBuffer, W: WriteBuffer>(
-        &self,
-        input: &R,
-        output: &W,
-        eof: bool
-        ) -> bool {
-        let last_full_block = input.remaining() == self.in_size && eof;
-        let more_input = input.remaining() > self.in_size;
-        let enough_input = more_input || last_full_block;
-        let enough_output = output.remaining() >= self.out_size;
-        if enough_input && enough_output {
-            true
-        } else {
-            false
-        }
+    /*
+    fn do_run_processor<R: ReadBuffer, W: WriteBuffer>(
+            &mut self,
+            input: &mut R,
+            output: &mut W) {
+        let next_in = input.next(self.in_size);
+        let next_out = output.next(self.out_size);
+        self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
+        vec::bytes::copy_memory(
+            self.hist_scratch,
+            next_in.slice_from(self.in_size - self.hist_size),
+            self.hist_size);
     }
-    fn run_func<R: ReadBuffer, W: WriteBuffer>(
+    fn run_processor<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
             output: &mut W,
-            eof: bool,
-            func: |&[u8], &mut [u8], &[u8]|,
-            last_sizer: |&[u8]| -> uint) {
-        let mut rewind: uint = 0;
+            eof: bool) {
         loop {
-            let last_full_block = input.remaining() == self.in_size && eof;
-            let more_input = input.remaining() > self.in_size;
-            let enough_input = more_input || last_full_block;
+            let enough_input = input.remaining() > self.in_size ||
+                (eof && input.remaining() >= self.in_size);
             let enough_output = output.remaining() >= self.out_size;
             if enough_input && enough_output {
-                let next_in = input.next(self.in_size);
-                let next_out = output.next(self.out_size);
-                func(next_in, next_out, self.hist_scratch.as_slice());
-                vec::bytes::copy_memory(
-                    self.hist_scratch,
-                    next_in.slice_from(self.in_size - self.hist_size),
-                    self.hist_size);
-                if last_full_block {
-                    let sz = last_sizer(next_out);
-                    rewind = self.out_size - sz;
-                    break;
-                }
+                self.do_run_processor(input, output);
             } else {
                 break;
             }
         }
-        output.rewind(rewind);
+    }
+    */
+    fn fast_mode<R: ReadBuffer, W: WriteBuffer>(
+            &mut self,
+            input: &mut R,
+            output: &mut W,
+            eof: bool) {
+        let has_next = || {
+            let enough_input = input.remaining() > self.in_size ||
+                (eof && input.remaining() >= self.in_size);
+            let enough_output = output.remaining() >= self.out_size;
+            (enough_input, enough_output)
+        };
+
+        /*
+        {
+            let enough_input = input.remaining() > self.in_size ||
+                (eof && input.remaining() >= self.in_size);
+            let enough_output = output.remaining() >= self.out_size;
+            if enough_input && enough_output {
+                let next_in = input.next(self.in_size);
+                let next_out = output.next(self.out_size);
+                self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
+            }
+        }
+        loop {
+            let enough_input = input.remaining() > self.in_size ||
+                (eof && input.remaining() >= self.in_size);
+            let enough_output = output.remaining() >= self.out_size;
+            if enough_input && enough_output {
+                let next_in = input.next(self.in_size);
+                let next_out = output.next(self.out_size);
+                self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
+            } else {
+                break;
+            }
+        }
+        */
     }
     fn process<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
             output: &mut W,
-            eof: bool,
-            func: |&[u8], &mut [u8], &[u8]|,
-            last_sizer: |&[u8]| -> uint) -> BufferResult {
+            eof: bool) -> BufferResult {
         loop {
+        /*
             match self.state {
                 ScratchEmpty => {
-                    self.run_func(
-                        input,
-                        output,
-                        eof,
-                        |a, b, c| func(a, b, c),
-                        |a| last_sizer(a));
+                    self.run_processor(input, output, eof);
+
+                    if input.remaining() <= self.in_size {
+                        if eof {
+                            self.state = LastInput;
+                        } else {
+                            if input.is_empty() {
+
+                            } else {
+
+                            }
+                        }
+                    } else {
+
+                    }
+
+
+
+
+                    if eof && input.remaining() < self.in_size {
+
+                    }
+
+                    if input.is_empty() {
+
+                    } else {
+
+                    }
+
+
                     if !input.is_empty() {
                         self.state = NeedInput;
                     } else {
-                        return BufferUnderflow;
+                        if eof {
+                            self.state = LastInput;
+                        } else {
+                            return BufferUnderflow;
+                        }
                     }
                 }
                 NeedInput => {
-                    push(input, &mut self.in_scratch);
+                    input.push_to(&mut self.in_scratch);
                     if self.in_scratch.is_full() {
-                        let mut rin = self.in_scratch.read_buffer();
-                        let mut wout = self.out_write_scratch.take_unwrap();
-                        self.run_func(
-                            &mut rin,
-                            &mut wout,
-                            eof,
-                            |a, b, c| func(a, b, c),
-                            |a| last_sizer(a));
-                        self.out_read_scratch = Some(wout.get_read_buffer());
-                        self.state = NeedOutput;
+                        let mut rin = self.in_scratch.take_read_buffer();
+                        if output.remaining() < self.out_size {
+                            let mut wout = self.out_write_scratch.take_unwrap();
+                            self.run_processor(&mut rin, &mut wout, eof && input.is_empty());
+                            self.out_read_scratch = Some(wout.into_read_buffer());
+                            self.state = NeedOutput;
+                        } else {
+                            self.run_processor(&mut rin, output, eof && input.is_empty());
+                            self.state = ScratchEmpty;
+                        }
                     } else {
-                        return BufferUnderflow;
+                        if eof {
+                            self.state = LastInput;
+                        } else {
+                            return BufferUnderflow;
+                        }
                     }
                 }
                 NeedOutput => {
                     let mut rout = self.out_read_scratch.take_unwrap();
-                    push(&mut rout, output);
+                    rout.push_to(output);
                     if rout.is_empty() {
-                        self.out_write_scratch = Some(rout.get_write_buffer());
+                        self.out_write_scratch = Some(rout.into_write_buffer());
                         self.state = ScratchEmpty;
                     } else {
                         self.out_read_scratch = Some(rout);
                         return BufferOverflow;
                     }
                 }
+                LastInput => {
+                    self.processor.last_input(self.in_scratch);
+                    if self.in_scratch.is_full() {
+                        self.run_processor(
+                            self.in_scratch.take_read_buffer(),
+                            wout,
+                            true);
+                    }
+                    self.processor.last_output(wout);
+                }
             }
+        */
         }
     }
 }

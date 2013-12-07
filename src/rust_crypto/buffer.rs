@@ -4,6 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::num;
 use std::vec;
 
 pub enum BufferResult {
@@ -12,44 +13,79 @@ pub enum BufferResult {
 }
 
 pub trait ReadBuffer {
-    fn remaining(&self) -> uint;
     fn is_empty(&self) -> bool;
-    fn next<'a>(&'a mut self, size: uint) -> &'a [u8];
+    fn is_full(&self) -> bool;
+    fn remaining(&self) -> uint;
+    fn capacity(&self) -> uint;
+
+    fn rewind(&mut self, distance: uint);
+    fn reset(&mut self);
+
+    fn peek_next<'a>(&'a self, count: uint) -> &'a [u8];
+    fn peek_remaining<'a>(&'a self) -> &'a [u8] {
+        self.peek_next(self.remaining())
+    }
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a [u8];
+    fn take_remaining<'a>(&'a mut self) -> &'a [u8] {
+        self.take_next(self.remaining())
+    }
+
+    fn push_to<W: WriteBuffer>(&mut self, output: &mut W) {
+        let count = num::min(output.remaining(), self.remaining());
+        vec::bytes::copy_memory(output.take_next(count), self.take_next(count), count);
+    }
 }
 
 pub trait WriteBuffer {
-    fn remaining(&self) -> uint;
     fn is_empty(&self) -> bool;
     fn is_full(&self) -> bool;
-    fn rewind(&mut self, cnt: uint);
-    fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8];
-    fn read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a>;
+    fn remaining(&self) -> uint;
+    fn capacity(&self) -> uint;
+
+    fn rewind(&mut self, distance: uint);
+    fn reset(&mut self);
+
+    fn peek_read_buffer<'a>(&'a self) -> RefReadBuffer<'a>;
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a mut [u8];
+    fn take_remaining<'a>(&'a mut self) -> &'a mut [u8] {
+        self.take_next(self.remaining())
+    }
+    fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a>;
+
+    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint);
 }
 
 pub struct RefReadBuffer<'self> {
-    buff: &'self [u8]
+    buff: &'self [u8],
+    pos: uint
 }
 
 impl <'self> RefReadBuffer<'self> {
     pub fn new<'a>(buff: &'a [u8]) -> RefReadBuffer<'a> {
         RefReadBuffer {
-            buff: buff
+            buff: buff,
+            pos: 0
         }
     }
 }
 
 impl <'self> ReadBuffer for RefReadBuffer<'self> {
-    fn remaining(&self) -> uint {
-        self.buff.len()
-    }
-    fn is_empty(&self) -> bool {
-        self.buff.len() == 0
-    }
-    fn next<'a>(&'a mut self, size: uint) -> &'a [u8] {
-        let s = self.buff.slice_to(size);
-        let r = self.buff.slice_from(size);
-        self.buff = r;
-        s
+    fn is_empty(&self) -> bool { self.pos == 0 }
+    fn is_full(&self) -> bool { self.pos == self.buff.len() }
+    fn remaining(&self) -> uint { self.buff.len() - self.pos }
+    fn capacity(&self) -> uint { self.buff.len() }
+
+    fn rewind(&mut self, distance: uint) { self.pos -= distance; }
+    fn reset(&mut self) { self.pos = 0; }
+
+    fn peek_next<'a>(&'a self, count: uint) -> &'a [u8] { self.buff.slice(self.pos, count) }
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a [u8] {
+        let r = self.buff.slice(self.pos, self.pos + count);
+        self.pos += count;
+        r
     }
 }
 
@@ -75,25 +111,28 @@ impl OwnedReadBuffer {
             pos: 0
         }
     }
-    pub fn get_write_buffer(self) -> OwnedWriteBuffer {
+    pub fn into_write_buffer(self) -> OwnedWriteBuffer {
         OwnedWriteBuffer::new(self.buff)
     }
 }
 
 impl ReadBuffer for OwnedReadBuffer {
-    fn remaining(&self) -> uint {
-        self.len - self.pos
-    }
-    fn is_empty(&self) -> bool {
-        self.pos == self.len
-    }
-    fn next<'a>(&'a mut self, size: uint) -> &'a [u8] {
-        let s = self.buff.slice(self.pos, self.pos + size);
-        self.pos += size;
-        s
+    fn is_empty(&self) -> bool { self.pos == 0 }
+    fn is_full(&self) -> bool { self.pos == self.len }
+    fn remaining(&self) -> uint { self.len - self.pos }
+    fn capacity(&self) -> uint { self.len }
+
+    fn rewind(&mut self, distance: uint) { self.pos -= distance; }
+    fn reset(&mut self) { self.pos = 0; }
+
+    fn peek_next<'a>(&'a self, count: uint) -> &'a [u8] { self.buff.slice(self.pos, count) }
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a [u8] {
+        let r = self.buff.slice(self.pos, self.pos + count);
+        self.pos += count;
+        r
     }
 }
-
 
 pub struct RefWriteBuffer<'self> {
     buff: &'self mut [u8],
@@ -113,27 +152,32 @@ impl <'self> RefWriteBuffer<'self> {
 }
 
 impl <'self> WriteBuffer for RefWriteBuffer<'self> {
-    fn remaining(&self) -> uint {
-        self.len - self.pos
+    fn is_empty(&self) -> bool { self.pos == 0 }
+    fn is_full(&self) -> bool { self.pos == self.len }
+    fn remaining(&self) -> uint { self.len - self.pos }
+    fn capacity(&self) -> uint { self.len }
+
+    fn rewind(&mut self, distance: uint) { self.pos -= distance; }
+    fn reset(&mut self) { self.pos = 0; }
+
+    fn peek_read_buffer<'a>(&'a self) -> RefReadBuffer<'a> {
+        RefReadBuffer::new(self.buff.slice_to(self.pos))
     }
-    fn is_empty(&self) -> bool {
-        self.pos == 0
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a mut [u8] {
+        let r = self.buff.mut_slice(self.pos, self.pos + count);
+        self.pos += count;
+        r
     }
-    fn is_full(&self) -> bool {
-        self.pos == self.len
-    }
-    fn rewind(&mut self, cnt: uint) {
-        self.pos -= cnt;
-    }
-    fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8] {
-        let s = self.buff.mut_slice(self.pos, self.pos + size);
-        self.pos += size;
-        s
-    }
-    fn read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
-        let r = RefReadBuffer::new(self.buff.slice_to(self.pos));
+    fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
+        let r = self.peek_read_buffer();
         self.pos = 0;
         r
+    }
+    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint) {
+        let (r,w) = self.buff.mut_split(self.pos);
+        let count = f(r, w);
+        self.pos += count;
     }
 }
 
@@ -152,36 +196,36 @@ impl OwnedWriteBuffer {
             pos: 0
         }
     }
-    pub fn reset(&mut self) {
-        self.pos = 0;
-    }
-    pub fn get_read_buffer(self) -> OwnedReadBuffer {
+    pub fn into_read_buffer(self) -> OwnedReadBuffer {
         let pos = self.pos;
         OwnedReadBuffer::new_with_len(self.buff, pos)
     }
 }
 
 impl WriteBuffer for OwnedWriteBuffer {
-    fn remaining(&self) -> uint {
-        self.len - self.pos
+    fn is_empty(&self) -> bool { self.pos == 0 }
+    fn is_full(&self) -> bool { self.pos == self.len }
+    fn remaining(&self) -> uint { self.len - self.pos }
+    fn capacity(&self) -> uint { self.len }
+
+    fn rewind(&mut self, distance: uint) { self.pos -= distance; }
+    fn reset(&mut self) { self.pos = 0; }
+
+    fn peek_read_buffer<'a>(&'a self) -> RefReadBuffer<'a> {
+        RefReadBuffer::new(self.buff.slice_to(self.pos))
     }
-    fn is_empty(&self) -> bool {
-        self.pos == 0
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a mut [u8] {
+        let r = self.buff.mut_slice(self.pos, self.pos + count);
+        self.pos += count;
+        r
     }
-    fn is_full(&self) -> bool {
-        self.pos == self.len
-    }
-    fn rewind(&mut self, cnt: uint) {
-        self.pos -= cnt;
-    }
-    fn next<'a>(&'a mut self, size: uint) -> &'a mut [u8] {
-        let s = self.buff.mut_slice(self.pos, self.pos + size);
-        self.pos += size;
-        s
-    }
-    fn read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
-        let r = RefReadBuffer::new(self.buff.slice_to(self.pos));
+    fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
+        let r = self.peek_read_buffer();
         self.pos = 0;
         r
+    }
+    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint) {
+        fail!();
     }
 }

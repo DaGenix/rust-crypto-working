@@ -7,7 +7,8 @@
 use buffer::{ReadBuffer, WriteBuffer, RefReadBuffer, OwnedReadBuffer, RefWriteBuffer,
     OwnedWriteBuffer, BufferResult, BufferUnderflow, BufferOverflow};
 use cryptoutil::FixedBufferHeap;
-use symmetriccipher::{BlockEncryptor, Encryptor, BlockDecryptor, Decryptor};
+use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, BlockEncryptorX8,
+    Decryptor};
 
 use std::num;
 use std::vec;
@@ -89,8 +90,8 @@ impl <P: BlockProcessor> BlockEngine<P> {
                 let last_input_block = eof && !next_input_ok;
                 if  last_input_block {
                     if self.processor.last_output(output) {
-                        // TODO - process the padding directly here so that we can avoid copying into
-                        // the history_buffer.
+                        // TODO - process the padding directly here so that we can avoid copying
+                        // into the history_buffer.
                         Some(NeedInput)
                     } else {
                         Some(Error)
@@ -268,6 +269,22 @@ impl <P: BlockProcessor> BlockEngine<P> {
             }
         }
     }
+    fn reset(&mut self) {
+        self.state = ScratchEmpty;
+        self.in_scratch.reset();
+        if self.out_read_scratch.is_some() {
+            let ors = self.out_read_scratch.take_unwrap();
+            let ows = ors.into_write_buffer();
+            self.out_write_scratch = Some(ows);
+        } else {
+            self.out_write_scratch.as_mut().mutate( |ows| { ows.reset(); ows } );
+        }
+    }
+    fn reset_with_history(&mut self, history: &[u8]) {
+        self.reset();
+        vec::bytes::copy_memory(self.hist_scratch, history, self.hist_size);
+    }
+    fn get_mut_processor<'a>(&'a mut self) -> &'a mut P { &mut self.processor }
 }
 
 struct EcbNoPaddingEncryptorProcessor<T> {
@@ -296,6 +313,9 @@ impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
         EcbNoPaddingEncryptor {
             block_engine: BlockEngine::new(processor, block_size, block_size)
         }
+    }
+    pub fn reset(&mut self) {
+        self.block_engine.reset();
     }
 }
 
@@ -329,6 +349,9 @@ impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
         EcbNoPaddingDecryptor {
             block_engine: BlockEngine::new(processor, block_size, block_size)
         }
+    }
+    pub fn reset(&mut self) {
+        self.block_engine.reset();
     }
 }
 
@@ -511,6 +534,12 @@ struct CbcPkcsPaddingEncryptorProcessor<T> {
     temp2: ~[u8]
 }
 
+impl <T> CbcPkcsPaddingEncryptorProcessor<T> {
+    fn reset(&mut self, iv: &[u8]) {
+        vec::bytes::copy_memory(self.temp1, iv, iv.len());
+    }
+}
+
 impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> {
     fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
         for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
@@ -543,6 +572,10 @@ impl <T: BlockEncryptor> CbcPkcsPaddingEncryptor<T> {
         CbcPkcsPaddingEncryptor {
             block_engine: BlockEngine::new(processor, block_size, block_size)
         }
+    }
+    pub fn reset(&mut self, iv: &[u8]) {
+        self.block_engine.reset();
+        self.block_engine.get_mut_processor().reset(iv);
     }
 }
 
@@ -602,13 +635,180 @@ impl <T: BlockDecryptor> Decryptor for CbcPkcsPaddingDecryptor<T> {
     }
 }
 
+fn min3(a: uint, b: uint, c: uint) -> uint {
+    if a < b {
+        if a < c {
+            a
+        } else {
+            c
+        }
+    } else {
+        if b < c {
+            b
+        } else {
+            c
+        }
+    }
+}
+
+fn add_ctr(ctr: &mut [u8], mut ammount: u8) {
+    for i in ctr.mut_iter().invert() {
+        let prev = *i;
+        *i += ammount;
+        if *i >= prev {
+            break;
+        }
+        ammount = 1;
+    }
+}
+
+pub struct CtrMode<A> {
+    priv algo: A,
+    priv ctr: ~[u8],
+    priv bytes: Option<OwnedReadBuffer>
+}
+
+impl <A: BlockEncryptor> CtrMode<A> {
+    fn new(algo: A, ctr: ~[u8]) -> CtrMode<A> {
+        let block_size = algo.block_size();
+        CtrMode {
+            algo: algo,
+            ctr: ctr,
+            bytes: Some(OwnedReadBuffer::new_with_len(vec::from_elem(block_size, 0u8), 0))
+        }
+    }
+    fn reset(&mut self, ctr: &[u8]) {
+        vec::bytes::copy_memory(self.ctr, ctr, self.algo.block_size());
+        match self.bytes {
+            Some(ref mut b) => b.reset(),
+            None => fail!()
+        }
+    }
+}
+
+impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        loop {
+            if input.is_empty() {
+                return Ok(BufferUnderflow);
+            }
+            if output.is_full() {
+                return Ok(BufferOverflow)
+            }
+            // TODO - something less yucky here?
+            if self.bytes.as_ref().take_unwrap().is_empty() {
+                let mut bytes = self.bytes.take_unwrap().into_write_buffer();
+                self.algo.encrypt_block(self.ctr, bytes.take_remaining());
+                self.bytes = Some(bytes.into_read_buffer());
+                add_ctr(self.ctr, 1);
+            }
+            match self.bytes {
+                Some(ref mut bytes) => {
+                    let count = min3(bytes.remaining(), input.remaining(), output.remaining());
+                    let bytes_it = bytes.take_next(count).iter();
+                    let in_it = input.take_next(count).iter();
+                    let out_it = output.take_next(count).mut_iter();
+                    for ((x, y), o) in bytes_it.zip(in_it).zip(out_it) {
+                        *o = *x ^ *y;
+                    }
+                }
+                None => fail!()
+            }
+        }
+    }
+}
+
+impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        self.encrypt(input, output, eof)
+    }
+}
+
+pub struct CtrModeX8<A> {
+    priv algo: A,
+    priv ctr_x8: ~[u8],
+    priv bytes: Option<OwnedReadBuffer>
+}
+
+fn construct_ctr_x8(in_ctr: &[u8], out_ctr_x8: &mut [u8]) {
+    for (i, ctr_i) in out_ctr_x8.mut_chunks(in_ctr.len()).enumerate() {
+        vec::bytes::copy_memory(ctr_i, in_ctr, in_ctr.len());
+        add_ctr(ctr_i, i as u8);
+    }
+}
+
+impl <A: BlockEncryptorX8> CtrModeX8<A> {
+    fn new(algo: A, ctr: &[u8]) -> CtrModeX8<A> {
+        let block_size = algo.block_size();
+        let mut ctr_x8 = vec::from_elem(block_size * 8, 0u8);
+        construct_ctr_x8(ctr, ctr_x8);
+        CtrModeX8 {
+            algo: algo,
+            ctr_x8: ctr_x8,
+            bytes: Some(OwnedReadBuffer::new_with_len(vec::from_elem(block_size * 8, 0u8), 0))
+        }
+    }
+    fn reset(&mut self, ctr: &[u8]) {
+        construct_ctr_x8(ctr, self.ctr_x8);
+        match self.bytes {
+            Some(ref mut b) => b.reset(),
+            None => fail!()
+        }
+    }
+}
+
+impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        loop {
+            if input.is_empty() {
+                return Ok(BufferUnderflow);
+            }
+            if output.is_full() {
+                return Ok(BufferOverflow)
+            }
+            // TODO - something less yucky here?
+            // TODO - Can some of this boilerplate be combined with regular CtrMode?
+            if self.bytes.as_ref().take_unwrap().is_empty() {
+                let mut bytes = self.bytes.take_unwrap().into_write_buffer();
+                self.algo.encrypt_block_x8(self.ctr_x8, bytes.take_remaining());
+                self.bytes = Some(bytes.into_read_buffer());
+                for ctr_i in self.ctr_x8.mut_chunks(self.algo.block_size()) {
+                    add_ctr(ctr_i, 8);
+                }
+            }
+            match self.bytes {
+                Some(ref mut bytes) => {
+                    let count = min3(bytes.remaining(), input.remaining(), output.remaining());
+                    let bytes_it = bytes.take_next(count).iter();
+                    let in_it = input.take_next(count).iter();
+                    let out_it = output.take_next(count).mut_iter();
+                    for ((x, y), o) in bytes_it.zip(in_it).zip(out_it) {
+                        *o = *x ^ *y;
+                    }
+                }
+                None => fail!()
+            }
+        }
+    }
+}
+
+impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        self.encrypt(input, output, eof)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use aessafe;
     use aesni;
     use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcsPaddingEncryptor,
         EcbPkcsPaddingDecryptor, CbcNoPaddingEncryptor, CbcNoPaddingDecryptor,
-        CbcPkcsPaddingEncryptor, CbcPkcsPaddingDecryptor};
+        CbcPkcsPaddingEncryptor, CbcPkcsPaddingDecryptor, CtrMode, CtrModeX8};
     use buffer::{RefReadBuffer, RefWriteBuffer};
     use symmetriccipher::{Encryptor, Decryptor};
 
@@ -643,6 +843,22 @@ mod test {
     }
 
     impl CipherTest for CbcTest {
+        fn get_plain<'a>(&'a self) -> &'a [u8] {
+            self.plain.slice(0, self.plain.len())
+        }
+        fn get_cipher<'a>(&'a self) -> &'a [u8] {
+            self.cipher.slice(0, self.cipher.len())
+        }
+    }
+
+    struct CtrTest {
+        key: ~[u8],
+        ctr: ~[u8],
+        plain: ~[u8],
+        cipher: ~[u8]
+    }
+
+    impl CipherTest for CtrTest {
         fn get_plain<'a>(&'a self) -> &'a [u8] {
             self.plain.slice(0, self.plain.len())
         }
@@ -736,6 +952,22 @@ mod test {
         ]
     }
 
+    fn aes_ctr_tests() -> ~[CtrTest] {
+        ~[
+            CtrTest {
+                key: ~[1, ..16],
+                ctr: ~[3, ..16],
+                plain: ~[2, ..33],
+                cipher: ~[
+                    0x64, 0x3e, 0x05, 0x19, 0x79, 0x78, 0xd7, 0x45,
+                    0xa9, 0x10, 0x5f, 0xd8, 0x4c, 0xd7, 0xe6, 0xb1,
+                    0x5f, 0x66, 0xc6, 0x17, 0x4b, 0x25, 0xea, 0x24,
+                    0xe6, 0xf9, 0x19, 0x09, 0xb7, 0xdd, 0x84, 0xfb,
+                    0x86 ]
+            }
+        ]
+    }
+
     fn get_aes_ecb_no_padding(test: &EcbTest)
             -> (EcbNoPaddingEncryptor<aessafe::AesSafe128Encryptor>,
                 EcbNoPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
@@ -768,6 +1000,24 @@ mod test {
         let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
         (CbcPkcsPaddingEncryptor::new(aes_enc, test.iv.clone()),
          CbcPkcsPaddingDecryptor::new(aes_dec, test.iv.clone()))
+    }
+
+    fn get_aes_ctr(test: &CtrTest)
+            -> (CtrMode<aessafe::AesSafe128Encryptor>,
+                CtrMode<aessafe::AesSafe128Encryptor>) {
+        let aes_enc_1 = aessafe::AesSafe128Encryptor::new(test.key);
+        let aes_enc_2 = aessafe::AesSafe128Encryptor::new(test.key);
+        (CtrMode::new(aes_enc_1, test.ctr.clone()),
+         CtrMode::new(aes_enc_2, test.ctr.clone()))
+    }
+
+    fn get_aes_ctr_x8(test: &CtrTest)
+            -> (CtrModeX8<aessafe::AesSafe128EncryptorX8>,
+                CtrModeX8<aessafe::AesSafe128EncryptorX8>) {
+        let aes_enc_1 = aessafe::AesSafe128EncryptorX8::new(test.key);
+        let aes_enc_2 = aessafe::AesSafe128EncryptorX8::new(test.key);
+        (CtrModeX8::new(aes_enc_1, test.ctr),
+         CtrModeX8::new(aes_enc_2, test.ctr))
     }
 
     fn run_test_full<T: CipherTest, E: Encryptor, D: Decryptor>(
@@ -835,16 +1085,35 @@ mod test {
         }
     }
 
+    #[test]
+    fn aes_ctr() {
+        let tests = aes_ctr_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_ctr(test);
+            run_test_full(test, &mut enc, &mut dec);
+        }
+    }
+
+    #[test]
+    fn aes_ctr_x8() {
+        let tests = aes_ctr_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_ctr_x8(test);
+            run_test_full(test, &mut enc, &mut dec);
+        }
+    }
+
     #[bench]
     pub fn aes_ecb_no_padding_bench(bh: &mut BenchHarness) {
         let key = [1u8, ..16];
         let plain = [3u8, ..512];
         let mut cipher = [3u8, ..528];
 
-        // TODO - this isn't very useful!
+        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let mut enc = EcbNoPaddingEncryptor::new(aes_enc);
+
         bh.iter( || {
-            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
-            let mut enc = EcbNoPaddingEncryptor::new(aes_enc);
+            enc.reset();
 
             let mut buff_in = RefReadBuffer::new(plain);
             let mut buff_out = RefWriteBuffer::new(cipher);
@@ -866,10 +1135,63 @@ mod test {
         let plain = [3u8, ..512];
         let mut cipher = [3u8, ..528];
 
-        // TODO - this isn't very useful!
+        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let mut enc = CbcPkcsPaddingEncryptor::new(aes_enc, iv.to_owned());
+
         bh.iter( || {
-            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
-            let mut enc = CbcPkcsPaddingEncryptor::new(aes_enc, iv.to_owned());
+            enc.reset(iv);
+
+            let mut buff_in = RefReadBuffer::new(plain);
+            let mut buff_out = RefWriteBuffer::new(cipher);
+
+            match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferOverflow) => fail!("Encryption not completed"),
+                Err(_) => fail!("Error"),
+                _ => {}
+            }
+        });
+
+        bh.bytes = (plain.len()) as u64;
+    }
+
+    #[bench]
+    pub fn aes_ctr_bench(bh: &mut BenchHarness) {
+        let key = [1u8, ..16];
+        let ctr = [2u8, ..16];
+        let plain = [3u8, ..512];
+        let mut cipher = [3u8, ..528];
+
+        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let mut enc = CtrMode::new(aes_enc, ctr.to_owned());
+
+        bh.iter( || {
+            enc.reset(ctr);
+
+            let mut buff_in = RefReadBuffer::new(plain);
+            let mut buff_out = RefWriteBuffer::new(cipher);
+
+            match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferOverflow) => fail!("Encryption not completed"),
+                Err(_) => fail!("Error"),
+                _ => {}
+            }
+        });
+
+        bh.bytes = (plain.len()) as u64;
+    }
+
+    #[bench]
+    pub fn aes_ctr_x8_bench(bh: &mut BenchHarness) {
+        let key = [1u8, ..16];
+        let ctr = [2u8, ..16];
+        let plain = [3u8, ..512];
+        let mut cipher = [3u8, ..528];
+
+        let aes_enc = aessafe::AesSafe128EncryptorX8::new(key);
+        let mut enc = CtrModeX8::new(aes_enc, ctr.to_owned());
+
+        bh.iter( || {
+            enc.reset(ctr);
 
             let mut buff_in = RefReadBuffer::new(plain);
             let mut buff_out = RefWriteBuffer::new(cipher);
@@ -884,159 +1206,6 @@ mod test {
         bh.bytes = (plain.len()) as u64;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-use buffer::{Buffer, MutBuffer, BufferResult, BufferUnderflow, BufferOverflow, next_slices};
-use cryptoutil::FixedBufferHeap;
-use symmetriccipher::{BlockEncryptor, Encryptor};
-
-pub struct EcbBlockMode<T> {
-    priv algo: T,
-    priv in_buff: FixedBufferHeap,
-    priv out_buff: FixedBufferHeap
-}
-
-impl <T: BlockEncryptor> EcbBlockMode<T> {
-    pub fn new(algo: T) -> EcbBlockMode<T> {
-        EcbBlockMode {
-            algo: algo,
-            in_buff: FixedBufferHeap::new(16),
-            out_buff: FixedBufferHeap::new(16)
-        }
-    }
-}
-
-fn encrypt_loop(
-        size: uint,
-        input: &mut Buffer,
-        in_buff: FixedBufferHeap,
-        output: &mut MutBuffer,
-        out_buff: FixedBufferHeap) -> BufferResult {
-    BufferUnderflow
-}
-
-
-
-struct UnpaddedBlockBuffer {
-    block_size: uint,
-    input_buff: ~[u8],
-    output_buff: ~[u8]
-}
-
-impl UnpaddedBlockBuffer {
-    fn new(block_size: uint) -> UnpaddedBlockBuffer {
-        UnpaddedBlockBuffer {
-            block_size: block_size,
-            input_buff: vec::with_capacity(block_size),
-            output_buff: vec::with_capacity(block_size)
-        }
-    }
-    fn next_slices<'a>(&self, input: &'a mut Buffer, output: &'a mut MutBuffer) ->
-            Option<(&'a [u8], &'a mut [u8])> {
-        let has_input = input.remaining() >= self.block_size;
-        let has_output = output.remaining() >= self.block_size;
-        if has_input && has_output {
-            Some((input.next_slice(self.block_size), output.next_slice(self.block_size)))
-        } else {
-            None
-        }
-    }
-    fn flush_output(&mut self, output: &mut MutBuffer) -> BufferResult {
-        while self.output_buff.len() > 0 {
-            if output.remaining() > 0 {
-                let x = self.output_buff().shift();
-                output.next_slice(1)[0] = x;
-            } else {
-                return BufferOverflow;
-            }
-        }
-        return BufferUnderflow;
-    }
-    fn fill_input(&mut self, input: &mut Buffer) -> BufferResult {
-        while self.input_buff.len() < self.input_buff.capacity() {
-            if input.remaining() > 0 {
-                self.input_buff.push(input.next_slice(1)[0]);
-            } else {
-                return BufferUnderflow;
-            }
-        }
-        return BufferOverflow;
-    }
-    fn process(
-            &mut self,
-            input: &mut Buffer,
-            output: &mut MutBuffer,
-            func: |(&[u8], &mut [u8])|) -> BufferResult {
-        if self.flush_output(output) == BufferOverflow {
-            return BufferOverflow;
-        }
-        if self.input_buff.len() > 0 {
-            if self.fill_input(input) == BufferUnderflow {
-                return BufferUnderflow;
-            } else {
-                // process input_buff
-                if output.remaining() >= self.block_size {
-                    func(self.input_buff, output.next_slice(self.block_size));
-                    self.input_buff.truncate(0);
-                } else {
-                    func(self.input_buff, self.output_buff);
-                    self.input_buff.truncate(0);
-                    self.flush_output(output);
-                    return BufferOverflow;
-                }
-            }
-        }
-        // if we get here, it means that both input_buff and output_buff are empty
-        loop {
-            match next_slices(block_size, input, output) {
-                Some((slice_in, slice_out)) => {
-                    func(slice_in, slice_out);
-                }
-                None => break
-            }
-        }
-        if input.remaining() < self.block_size {
-            self.fill_input(input)
-            BufferUnderflow
-        } else {
-            func(input.next_slice(self.block_size), self.output_buff);
-            self.flush_output(output)
-            BufferOverflow
-        }
-    }
-}
-
-
-impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
-    fn encrypt(&mut self, input: &mut Buffer, output: &mut MutBuffer) -> BufferResult {
-        BufferUnderflow
-    }
-    fn encrypt_final(&mut self, input: &mut Buffer, output: &mut MutBuffer) -> BufferResult {
-        BufferUnderflow
-    }
-}
-*/
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {

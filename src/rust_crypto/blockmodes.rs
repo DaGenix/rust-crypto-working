@@ -14,14 +14,17 @@ use std::vec;
 
 trait BlockProcessor {
     fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]);
-    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
-    fn last_output<W: WriteBuffer>(&mut self, output_buffer: &mut W) { }
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool { true }
+    fn last_output<W: WriteBuffer>(&mut self, output_buffer: &mut W) -> bool { true }
 }
 
 enum BlockEngineState {
     ScratchEmpty,
     NeedInput,
-    NeedOutput
+    NeedOutput,
+    LastInput,
+    Finished,
+    Error
 }
 
 struct BlockEngine<P> {
@@ -61,140 +64,156 @@ impl <P: BlockProcessor> BlockEngine<P> {
             ..BlockEngine::new(processor, in_size, out_size)
         }
     }
-    /*
-    fn do_run_processor<R: ReadBuffer, W: WriteBuffer>(
-            &mut self,
-            input: &mut R,
-            output: &mut W) {
-        let next_in = input.next(self.in_size);
-        let next_out = output.next(self.out_size);
-        self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
-        vec::bytes::copy_memory(
-            self.hist_scratch,
-            next_in.slice_from(self.in_size - self.hist_size),
-            self.hist_size);
-    }
-    fn run_processor<R: ReadBuffer, W: WriteBuffer>(
-            &mut self,
-            input: &mut R,
-            output: &mut W,
-            eof: bool) {
-        loop {
-            let enough_input = input.remaining() > self.in_size ||
-                (eof && input.remaining() >= self.in_size);
-            let enough_output = output.remaining() >= self.out_size;
-            if enough_input && enough_output {
-                self.do_run_processor(input, output);
-            } else {
-                break;
-            }
-        }
-    }
-    */
     fn fast_mode<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
             output: &mut W,
-            eof: bool) {
+            eof: bool) -> BlockEngineState {
         let has_next = || {
             let enough_input = input.remaining() > self.in_size ||
                 (eof && input.remaining() >= self.in_size);
             let enough_output = output.remaining() >= self.out_size;
             (enough_input, enough_output)
         };
-
-        /*
-        {
-            let enough_input = input.remaining() > self.in_size ||
-                (eof && input.remaining() >= self.in_size);
-            let enough_output = output.remaining() >= self.out_size;
-            if enough_input && enough_output {
-                let next_in = input.next(self.in_size);
-                let next_out = output.next(self.out_size);
-                self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
-            }
-        }
-        loop {
-            let enough_input = input.remaining() > self.in_size ||
-                (eof && input.remaining() >= self.in_size);
-            let enough_output = output.remaining() >= self.out_size;
-            if enough_input && enough_output {
-                let next_in = input.next(self.in_size);
-                let next_out = output.next(self.out_size);
-                self.processor.process_block(next_in, next_out, self.hist_scratch.as_slice());
+        let update_history = |last_in: &[u8]| {
+            vec::bytes::copy_memory(
+                self.hist_scratch,
+                last_in.slice_from(last_in.len() - self.hist_size),
+                self.hist_size);
+        };
+        let try_complete = |next_input_ok: bool, next_iter_ok: bool| {
+            if next_iter_ok {
+                input.rewind(self.hist_size);
+                None
             } else {
-                break;
+                let last_input_block = eof && !next_input_ok;
+                if  last_input_block {
+                    if self.processor.last_output(output) {
+                        // TODO - process the padding directly here so that we can avoid copying into
+                        // the history_buffer.
+                        Some(NeedInput)
+                    } else {
+                        Some(Error)
+                    }
+                } else {
+                    if input.is_empty() {
+                        Some(ScratchEmpty)
+                    } else {
+                        Some(NeedInput)
+                    }
+                }
+            }
+        };
+
+        match has_next() {
+            (true, true) => {
+                let next_input_ok: bool;
+                let next_iter_ok: bool;
+
+                {
+                    let next_in = input.take_next(self.in_size);
+                    let next_out = output.take_next(self.out_size);
+                    self.processor.process_block(self.hist_scratch.as_slice(), next_in, next_out);
+                    match has_next() {
+                        (a, b) => { next_input_ok = a; next_iter_ok = a && b; }
+                    }
+                    if !next_iter_ok {
+                        update_history(next_in);
+                    }
+                }
+
+                match try_complete(next_input_ok, next_iter_ok) {
+                    Some(r) => return r,
+                    None => { }
+                }
+            }
+            _ => {
+                if input.is_empty() {
+                    return ScratchEmpty;
+                } else {
+                    return NeedInput;
+                }
             }
         }
-        */
+
+        loop {
+            let next_input_ok: bool;
+            let next_iter_ok: bool;
+
+            {
+                let next_in = input.take_next(self.hist_size + self.in_size);
+                let next_out = output.take_next(self.out_size);
+                self.processor.process_block(
+                    next_in.slice_to(self.hist_size),
+                    next_in.slice_from(self.hist_size),
+                    next_out);
+                match has_next() {
+                    (a, b) => { next_input_ok = a; next_iter_ok = a && b; }
+                }
+                if !next_iter_ok {
+                    update_history(next_in);
+                }
+            }
+
+            match try_complete(next_input_ok, next_iter_ok) {
+                Some(r) => return r,
+                None => { }
+            }
+        }
     }
     fn process<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
             output: &mut W,
-            eof: bool) -> BufferResult {
+            eof: bool) -> Result<BufferResult, &'static str> {
         loop {
-        /*
             match self.state {
                 ScratchEmpty => {
-                    self.run_processor(input, output, eof);
-
-                    if input.remaining() <= self.in_size {
-                        if eof {
-                            self.state = LastInput;
-                        } else {
+                    self.state = self.fast_mode(input, output, eof);
+                    match self.state {
+                        ScratchEmpty => {
                             if input.is_empty() {
-
-                            } else {
-
+                                return Ok(BufferUnderflow);
                             }
                         }
-                    } else {
-
-                    }
-
-
-
-
-                    if eof && input.remaining() < self.in_size {
-
-                    }
-
-                    if input.is_empty() {
-
-                    } else {
-
-                    }
-
-
-                    if !input.is_empty() {
-                        self.state = NeedInput;
-                    } else {
-                        if eof {
-                            self.state = LastInput;
-                        } else {
-                            return BufferUnderflow;
-                        }
+                        _ => {}
                     }
                 }
                 NeedInput => {
                     input.push_to(&mut self.in_scratch);
-                    if self.in_scratch.is_full() {
+                    if self.in_scratch.is_full() && (eof || !input.is_empty()) {
                         let mut rin = self.in_scratch.take_read_buffer();
-                        if output.remaining() < self.out_size {
-                            let mut wout = self.out_write_scratch.take_unwrap();
-                            self.run_processor(&mut rin, &mut wout, eof && input.is_empty());
-                            self.out_read_scratch = Some(wout.into_read_buffer());
-                            self.state = NeedOutput;
-                        } else {
-                            self.run_processor(&mut rin, output, eof && input.is_empty());
-                            self.state = ScratchEmpty;
+                        let mut wout = self.out_write_scratch.take_unwrap();
+
+                        {
+                            let next_in = rin.take_remaining();
+                            let next_out = wout.take_remaining();
+                            self.processor.process_block(
+                                self.hist_scratch.as_slice(),
+                                next_in,
+                                next_out);
+                            vec::bytes::copy_memory(
+                                self.hist_scratch,
+                                next_in.slice_from(self.in_size - self.hist_size),
+                                self.hist_size);
                         }
+
+                        if eof && input.remaining() < self.in_size {
+                            if self.processor.last_output(&mut wout) {
+                                self.state = NeedOutput;
+                            } else {
+                                self.state = Error;
+                            }
+                        } else {
+                            self.state = NeedOutput;
+                        }
+
+                        self.out_read_scratch = Some(wout.into_read_buffer());
                     } else {
                         if eof {
                             self.state = LastInput;
                         } else {
-                            return BufferUnderflow;
+                            return Ok(BufferUnderflow);
                         }
                     }
                 }
@@ -206,572 +225,395 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         self.state = ScratchEmpty;
                     } else {
                         self.out_read_scratch = Some(rout);
-                        return BufferOverflow;
+                        return Ok(BufferOverflow);
                     }
                 }
                 LastInput => {
-                    self.processor.last_input(self.in_scratch);
-                    if self.in_scratch.is_full() {
-                        self.run_processor(
-                            self.in_scratch.take_read_buffer(),
-                            wout,
-                            true);
-                    }
-                    self.processor.last_output(wout);
-                }
-            }
-        */
-        }
-    }
-}
-
-
-
-
-
-/*
-
-
-
-
-fn next_slices<'a, R: ReadBuffer, W: WriteBuffer>(
-        block_size: uint,
-        input: &'a mut R,
-        output: &'a mut W,
-        eof: bool)
-        -> Option<(&'a [u8], &'a mut [u8], bool)> {
-    let input_ok = input.remaining() > block_size || (input.remaining() >= block_size && eof);
-    let output_ok = output.remaining() >= block_size;
-    if input_ok && output_ok {
-        let no_more_input = input.remaining() == block_size;
-        let slice_in = input.next(block_size);
-        let slice_out = output.next(block_size);
-        Some((slice_in, slice_out, no_more_input))
-    } else {
-        None
-    }
-}
-
-enum BlockEngineState {
-    NeedInput,
-    FillingIn,
-    NeedOutput,
-    AwaitingPadding,
-    Finishing
-}
-
-struct BlockEngine {
-    block_size: uint,
-    in_buff: OwnedWriteBuffer,
-    out_write_buff: Option<OwnedWriteBuffer>,
-    out_read_buff: Option<OwnedReadBuffer>,
-    state: BlockEngineState
-}
-
-impl BlockEngine {
-    fn new(block_size: uint) -> BlockEngine {
-        BlockEngine {
-            block_size: block_size,
-            in_buff: OwnedWriteBuffer::new(vec::from_elem(block_size, 0u8)),
-            out_write_buff: Some(OwnedWriteBuffer::new(vec::from_elem(block_size, 0u8))),
-            out_read_buff: None,
-            state: NeedInput
-        }
-    }
-    fn is_empty(&self) -> bool {
-        match self.state {
-            // TODO - this seems awkward
-            AwaitingPadding | Finishing => true,
-            _ => false
-        }
-    }
-    fn add_padding<'a>(&'a mut self, padding_func: |&'a mut OwnedWriteBuffer|) {
-        match self.state {
-            AwaitingPadding => {
-                padding_func(&mut self.in_buff);
-                self.state = Finishing;
-            }
-            _ => {}
-        }
-    }
-    fn process<R: ReadBuffer, W: WriteBuffer>(
-            &mut self,
-            input: &mut R,
-            output: &mut W,
-            eof: bool,
-            func: |&[u8], &mut [u8], bool| -> uint) -> BufferResult {
-        loop {
-            match self.state {
-                NeedInput => {
-                    loop {
-                        // TODO - convert to ChunkIter / zip?
-                        let cnt: uint;
-                        match next_slices(self.block_size, input, output, eof) {
-                            Some((slice_in, slice_out, no_more_input)) => {
-                                let last = eof && no_more_input;
-                                cnt = func(slice_in, slice_out, last);
+                    if self.processor.last_input(&mut self.in_scratch) {
+                        if self.in_scratch.is_full() {
+                            let mut rin = self.in_scratch.take_read_buffer();
+                            let mut wout = self.out_write_scratch.take_unwrap();
+                            {
+                                let next_in = rin.take_remaining();
+                                let next_out = wout.take_remaining();
+                                self.processor.process_block(
+                                    self.hist_scratch.as_slice(),
+                                    next_in,
+                                    next_out);
                             }
-                            None => break
+                            self.out_read_scratch = Some(wout.into_read_buffer());
                         }
-                        output.rewind(self.block_size - cnt);
-                    }
-                    if input.is_empty() {
-                        if eof {
-                            self.state = AwaitingPadding;
-                        }
-                        return BufferUnderflow;
+                        self.state = Finished;
                     } else {
-                        self.state = FillingIn;
+                        self.state = Error;
                     }
                 }
-                FillingIn => {
-                    let mut out_write_buff = match self.out_write_buff.take() {
-                        Some(x) => x,
-                        None => fail!("No out_write_buff.")
-                    };
-                    push(input, &mut self.in_buff);
-                    let has_more_input = input.remaining() > 0;
-                    if self.in_buff.is_full() && (eof || has_more_input) {
-                        // TODO - common function for this and Finishing state
-                        // TODO - write directly to output if possible
-                        let cnt: uint;
-                        {
-                            let mut in_reader = self.in_buff.read_buffer();
-                            let slice_in = in_reader.next(self.block_size);
-                            let slice_out = out_write_buff.next(self.block_size);
-                            cnt = func(slice_in, slice_out, eof);
-                        }
-                        out_write_buff.rewind(self.block_size - cnt);
-                        self.in_buff.reset();
-                        self.out_read_buff = Some(out_write_buff.get_read_buffer());
-                        self.state = NeedOutput;
-                    } else {
-                        self.out_write_buff = Some(out_write_buff);
-                        if eof {
-                            self.state = AwaitingPadding;
-                            return BufferUnderflow;
-                        } else {
-                            return BufferUnderflow;
-                        }
-                    }
-                }
-                NeedOutput => {
-                    let mut out_read_buff = self.out_read_buff.take_unwrap();
-                    push(&mut out_read_buff, output);
-                    if out_read_buff.is_empty() {
-                        self.out_write_buff = Some(out_read_buff.get_write_buffer());
-                        if eof {
-                            self.state = AwaitingPadding;
-                            return BufferUnderflow;
-                        } else {
-                            self.state = NeedInput;
-                        }
-                    } else {
-                        self.out_read_buff = Some(out_read_buff);
-                        self.state = NeedOutput;
-                        return BufferOverflow;
-                    }
-                }
-                AwaitingPadding => {
-                    fail!("Waiting for padding or called incorrectly");
-                }
-                Finishing => {
-                    assert!(input.is_empty());
-                    if self.in_buff.is_full() {
-                        let mut out_write_buff = self.out_write_buff.take_unwrap();
-                        // TODO - common function for this and FillingIn state
-                        // TODO - write directly to output if possible
-                        let cnt: uint;
-                        {
-                            let mut in_reader = self.in_buff.read_buffer();
-                            let slice_in = in_reader.next(self.block_size);
-                            let slice_out = out_write_buff.next(self.block_size);
-                            cnt = func(slice_in, slice_out, eof);
-                        }
-                        out_write_buff.rewind(self.block_size - cnt);
-                        self.in_buff.reset();
-                        self.out_read_buff = Some(out_write_buff.get_read_buffer());
-                    }
-                    match self.out_read_buff {
-                        Some(ref mut out_read_buff) => {
-                            push(out_read_buff, output);
-                            if out_read_buff.is_empty() {
-                                return BufferUnderflow;
+                Finished => {
+                    match self.out_read_scratch {
+                        Some(ref mut rout) => {
+                            rout.push_to(output);
+                            if rout.is_empty() {
+                                return Ok(BufferUnderflow);
                             } else {
-                                return BufferOverflow;
+                                return Ok(BufferOverflow);
                             }
                         }
-                        None => fail!("In Finishing state without out_read_buff.")
+                        None => { return Ok(BufferUnderflow); }
                     }
+                }
+                Error => {
+                    // TODO - Better error messages / codes
+                    return Err("Failed somewhere.");
                 }
             }
         }
+    }
+}
+
+struct EcbNoPaddingEncryptorProcessor<T> {
+    algo: T
+}
+
+impl <T: BlockEncryptor> BlockProcessor for EcbNoPaddingEncryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.encrypt_block(input, output);
+    }
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
+        input_buffer.is_empty()
     }
 }
 
 pub struct EcbNoPaddingEncryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine
+    priv block_engine: BlockEngine<EcbNoPaddingEncryptorProcessor<T>>
 }
 
 impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
     pub fn new(algo: T) -> EcbNoPaddingEncryptor<T> {
         let block_size = algo.block_size();
+        let processor = EcbNoPaddingEncryptorProcessor {
+            algo: algo
+        };
         EcbNoPaddingEncryptor {
-            algo: algo,
-            block_engine: BlockEngine::new(block_size),
+            block_engine: BlockEngine::new(processor, block_size, block_size)
         }
     }
 }
 
 impl <T: BlockEncryptor> Encryptor for EcbNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
-            self.algo.encrypt_block(slice_in, slice_out);
-            self.algo.block_size()
-        };
-        let result = self.block_engine.process(input, output, eof, enc_fun);
-        match (eof, result, self.block_engine.is_empty()) {
-            (true, BufferUnderflow, false) => {
-                fail!("NoPadding modes can only work on multiples of the block size.");
-            }
-            _ => {}
-        }
-        return result;
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
+    }
+}
+
+struct EcbNoPaddingDecryptorProcessor<T> {
+    algo: T
+}
+
+impl <T: BlockDecryptor> BlockProcessor for EcbNoPaddingDecryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.decrypt_block(input, output);
     }
 }
 
 pub struct EcbNoPaddingDecryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine
+    priv block_engine: BlockEngine<EcbNoPaddingDecryptorProcessor<T>>
 }
 
 impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
     pub fn new(algo: T) -> EcbNoPaddingDecryptor<T> {
         let block_size = algo.block_size();
+        let processor = EcbNoPaddingDecryptorProcessor {
+            algo: algo
+        };
         EcbNoPaddingDecryptor {
-            algo: algo,
-            block_engine: BlockEngine::new(block_size),
+            block_engine: BlockEngine::new(processor, block_size, block_size)
         }
     }
 }
 
 impl <T: BlockDecryptor> Decryptor for EcbNoPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let dec_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
-            self.algo.decrypt_block(slice_in, slice_out);
-            self.algo.block_size()
-        };
-        let result = self.block_engine.process(input, output, eof, dec_fun);
-        match (eof, result, self.block_engine.is_empty()) {
-            (true, BufferUnderflow, false) => {
-                fail!("NoPadding modes can only work on multiples of the block size.");
-            }
-            _ => {}
-        }
-        return result;
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
     }
 }
 
-pub struct EcbPkcs7PaddingEncryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine
+struct EcbPkcsPaddingEncryptorProcessor<T> {
+    algo: T
 }
 
-impl <T: BlockEncryptor> EcbPkcs7PaddingEncryptor<T> {
-    pub fn new(algo: T) -> EcbPkcs7PaddingEncryptor<T> {
+impl <T: BlockEncryptor> BlockProcessor for EcbPkcsPaddingEncryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.encrypt_block(input, output);
+    }
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
+        let rem = input_buffer.remaining();
+        for v in input_buffer.take_remaining().mut_iter() {
+            *v = rem as u8;
+        }
+        true
+    }
+}
+
+pub struct EcbPkcsPaddingEncryptor<T> {
+    priv block_engine: BlockEngine<EcbPkcsPaddingEncryptorProcessor<T>>
+}
+
+impl <T: BlockEncryptor> EcbPkcsPaddingEncryptor<T> {
+    pub fn new(algo: T) -> EcbPkcsPaddingEncryptor<T> {
         let block_size = algo.block_size();
-        EcbPkcs7PaddingEncryptor {
-            algo: algo,
-            block_engine: BlockEngine::new(block_size),
+        let processor = EcbPkcsPaddingEncryptorProcessor {
+            algo: algo
+        };
+        EcbPkcsPaddingEncryptor {
+            block_engine: BlockEngine::new(processor, block_size, block_size)
         }
     }
 }
 
-impl <T: BlockEncryptor> Encryptor for EcbPkcs7PaddingEncryptor<T> {
+impl <T: BlockEncryptor> Encryptor for EcbPkcsPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
-            self.algo.encrypt_block(slice_in, slice_out);
-            self.algo.block_size()
-        };
-        let result = do self.block_engine.process(input, output, eof) |a, b, c| {
-            enc_fun(a, b, c)
-        };
-        match (eof, result) {
-            (true, BufferUnderflow) => {
-                do self.block_engine.add_padding() |in_buff| {
-                    let remaining = in_buff.remaining();
-                    for x in in_buff.next(remaining).mut_iter() {
-                        *x = remaining as u8;
-                    }
-                }
-                return do self.block_engine.process(input, output, eof) |a, b, c| {
-                    enc_fun(a, b, c)
-                };
-            }
-            _ => return result
-        }
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
     }
 }
 
-pub struct EcbPkcs7PaddingDecryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine
+struct EcbPkcsPaddingDecryptorProcessor<T> {
+    algo: T
 }
 
-impl <T: BlockDecryptor> EcbPkcs7PaddingDecryptor<T> {
-    pub fn new(algo: T) -> EcbPkcs7PaddingDecryptor<T> {
+impl <T: BlockDecryptor> BlockProcessor for EcbPkcsPaddingDecryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.decrypt_block(input, output);
+    }
+    fn last_output<W: WriteBuffer>(&mut self, output_buffer: &mut W) -> bool {
+        // TODO - be more robust
+        let last_byte: u8;
+        {
+            let mut rb = output_buffer.peek_read_buffer();
+            let data = rb.take_remaining();
+            last_byte = data[data.len() - 1];
+        }
+        output_buffer.rewind(last_byte as uint);
+        true
+    }
+}
+
+pub struct EcbPkcsPaddingDecryptor<T> {
+    priv block_engine: BlockEngine<EcbPkcsPaddingDecryptorProcessor<T>>
+}
+
+impl <T: BlockDecryptor> EcbPkcsPaddingDecryptor<T> {
+    pub fn new(algo: T) -> EcbPkcsPaddingDecryptor<T> {
         let block_size = algo.block_size();
-        EcbPkcs7PaddingDecryptor {
-            algo: algo,
-            block_engine: BlockEngine::new(block_size),
+        let processor = EcbPkcsPaddingDecryptorProcessor {
+            algo: algo
+        };
+        EcbPkcsPaddingDecryptor {
+            block_engine: BlockEngine::new(processor, block_size, block_size)
         }
     }
 }
 
-impl <T: BlockDecryptor> Decryptor for EcbPkcs7PaddingDecryptor<T> {
+impl <T: BlockDecryptor> Decryptor for EcbPkcsPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let dec_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, last_block| {
-            self.algo.decrypt_block(slice_in, slice_out);
-            if last_block {
-                // TODO - verify all bytes!
-                let bs = self.algo.block_size();
-                bs - (slice_out[bs - 1] as uint)
-            } else {
-                self.algo.block_size()
-            }
-        };
-        let result = do self.block_engine.process(input, output, eof) |a, b, c| {
-            dec_fun(a, b, c)
-        };
-        return result
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
+    }
+}
+
+struct CbcNoPaddingEncryptorProcessor<T> {
+    algo: T,
+    temp1: ~[u8],
+    temp2: ~[u8]
+}
+
+impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
+            *o = *x ^ *y;
+        }
+        self.algo.encrypt_block(self.temp2, self.temp1);
+        vec::bytes::copy_memory(output, self.temp1, self.algo.block_size());
+    }
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
+        input_buffer.is_empty()
     }
 }
 
 pub struct CbcNoPaddingEncryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine,
-    priv temp1: ~[u8],
-    priv temp2: ~[u8]
+    priv block_engine: BlockEngine<CbcNoPaddingEncryptorProcessor<T>>
 }
 
 impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
-    pub fn new(algo: T, iv: &[u8]) -> CbcNoPaddingEncryptor<T> {
+    pub fn new(algo: T, iv: ~[u8]) -> CbcNoPaddingEncryptor<T> {
         let block_size = algo.block_size();
-        let mut temp1 = vec::from_elem(block_size, 0u8);
-        vec::bytes::copy_memory(temp1, iv, block_size);
-        CbcNoPaddingEncryptor {
+        let processor = CbcNoPaddingEncryptorProcessor {
             algo: algo,
-            block_engine: BlockEngine::new(block_size),
-            temp1: temp1,
+            temp1: iv,
             temp2: vec::from_elem(block_size, 0u8)
+        };
+        CbcNoPaddingEncryptor {
+            block_engine: BlockEngine::new(processor, block_size, block_size)
         }
     }
 }
 
 impl <T: BlockEncryptor> Encryptor for CbcNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
-            for ((x, y), o) in self.temp1.iter().zip(slice_in.iter()).zip(self.temp2.mut_iter()) {
-                *o = *x ^ *y;
-            }
-            self.algo.encrypt_block(self.temp2, self.temp1);
-            vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
-            self.algo.block_size()
-        };
-        let result = self.block_engine.process(input, output, eof, enc_fun);
-        match (eof, result, self.block_engine.is_empty()) {
-            (true, BufferUnderflow, false) => {
-                fail!("NoPadding modes can only work on multiples of the block size.");
-            }
-            _ => {}
-        }
-        return result;
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
     }
 }
 
-pub struct CbcPkcs7PaddingEncryptor<T> {
-    priv algo: T,
-    priv block_engine: BlockEngine,
-    priv temp1: ~[u8],
-    priv temp2: ~[u8]
+struct CbcNoPaddingDecryptorProcessor<T> {
+    algo: T,
+    temp: ~[u8]
 }
 
-impl <T: BlockEncryptor> CbcPkcs7PaddingEncryptor<T> {
-    pub fn new(algo: T, iv: &[u8]) -> CbcPkcs7PaddingEncryptor<T> {
+impl <T: BlockDecryptor> BlockProcessor for CbcNoPaddingDecryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.decrypt_block(input, self.temp);
+        for ((x, y), o) in self.temp.iter().zip(history.iter()).zip(output.mut_iter()) {
+            *o = *x ^ *y;
+        }
+    }
+}
+
+pub struct CbcNoPaddingDecryptor<T> {
+    priv block_engine: BlockEngine<CbcNoPaddingDecryptorProcessor<T>>
+}
+
+impl <T: BlockDecryptor> CbcNoPaddingDecryptor<T> {
+    pub fn new(algo: T, iv: ~[u8]) -> CbcNoPaddingDecryptor<T> {
         let block_size = algo.block_size();
-        let mut temp1 = vec::from_elem(block_size, 0u8);
-        vec::bytes::copy_memory(temp1, iv, block_size);
-        CbcPkcs7PaddingEncryptor {
+        let processor = CbcNoPaddingDecryptorProcessor {
             algo: algo,
-            block_engine: BlockEngine::new(block_size),
-            temp1: temp1,
-            temp2: vec::from_elem(block_size, 0u8)
+            temp: vec::from_elem(block_size, 0u8)
+        };
+        CbcNoPaddingDecryptor {
+            block_engine: BlockEngine::new_with_history(processor, block_size, block_size, iv)
         }
     }
 }
 
-impl <T: BlockEncryptor> Encryptor for CbcPkcs7PaddingEncryptor<T> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> BufferResult {
-        let enc_fun: |&[u8], &mut [u8], bool| -> uint = |slice_in, slice_out, _| {
-            for ((x, y), o) in self.temp1.iter().zip(slice_in.iter()).zip(self.temp2.mut_iter()) {
-                *o = *x ^ *y;
-            }
-            self.algo.encrypt_block(self.temp2, self.temp1);
-            vec::bytes::copy_memory(slice_out, self.temp1, self.algo.block_size());
-            self.algo.block_size()
-        };
-        let result = do self.block_engine.process(input, output, eof) |a, b, c| {
-            enc_fun(a, b, c)
-        };
-        match (eof, result) {
-            (true, BufferUnderflow) => {
-                do self.block_engine.add_padding() |in_buff| {
-                    let remaining = in_buff.remaining();
-                    for x in in_buff.next(remaining).mut_iter() {
-                        *x = remaining as u8;
-                    }
-                }
-                return do self.block_engine.process(input, output, true) |a, b, c| {
-                    enc_fun(a, b, c)
-                };
-            }
-            _ => return result
+impl <T: BlockDecryptor> Decryptor for CbcNoPaddingDecryptor<T> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
+    }
+}
+
+struct CbcPkcsPaddingEncryptorProcessor<T> {
+    algo: T,
+    temp1: ~[u8],
+    temp2: ~[u8]
+}
+
+impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
+            *o = *x ^ *y;
         }
+        self.algo.encrypt_block(self.temp2, self.temp1);
+        vec::bytes::copy_memory(output, self.temp1, self.algo.block_size());
+    }
+    fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
+        let rem = input_buffer.remaining();
+        for v in input_buffer.take_remaining().mut_iter() {
+            *v = rem as u8;
+        }
+        true
+    }
+}
+
+pub struct CbcPkcsPaddingEncryptor<T> {
+    priv block_engine: BlockEngine<CbcPkcsPaddingEncryptorProcessor<T>>
+}
+
+impl <T: BlockEncryptor> CbcPkcsPaddingEncryptor<T> {
+    pub fn new(algo: T, iv: ~[u8]) -> CbcPkcsPaddingEncryptor<T> {
+        let block_size = algo.block_size();
+        let processor = CbcPkcsPaddingEncryptorProcessor {
+            algo: algo,
+            temp1: iv,
+            temp2: vec::from_elem(block_size, 0u8)
+        };
+        CbcPkcsPaddingEncryptor {
+            block_engine: BlockEngine::new(processor, block_size, block_size)
+        }
+    }
+}
+
+impl <T: BlockEncryptor> Encryptor for CbcPkcsPaddingEncryptor<T> {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
+    }
+}
+
+struct CbcPkcsPaddingDecryptorProcessor<T> {
+    algo: T,
+    temp: ~[u8]
+}
+
+impl <T: BlockDecryptor> BlockProcessor for CbcPkcsPaddingDecryptorProcessor<T> {
+    fn process_block(&mut self, history: &[u8], input: &[u8], output: &mut [u8]) {
+        self.algo.decrypt_block(input, self.temp);
+        for ((x, y), o) in self.temp.iter().zip(history.iter()).zip(output.mut_iter()) {
+            *o = *x ^ *y;
+        }
+    }
+    fn last_output<W: WriteBuffer>(&mut self, output_buffer: &mut W) -> bool {
+        // TODO - be more robust
+        let last_byte: u8;
+        {
+            let mut rb = output_buffer.peek_read_buffer();
+            let data = rb.take_remaining();
+            last_byte = data[data.len() - 1];
+        }
+        output_buffer.rewind(last_byte as uint);
+        true
+    }
+}
+
+pub struct CbcPkcsPaddingDecryptor<T> {
+    priv block_engine: BlockEngine<CbcPkcsPaddingDecryptorProcessor<T>>
+}
+
+impl <T: BlockDecryptor> CbcPkcsPaddingDecryptor<T> {
+    pub fn new(algo: T, iv: ~[u8]) -> CbcPkcsPaddingDecryptor<T> {
+        let block_size = algo.block_size();
+        let processor = CbcPkcsPaddingDecryptorProcessor {
+            algo: algo,
+            temp: vec::from_elem(block_size, 0u8)
+        };
+        CbcPkcsPaddingDecryptor {
+            block_engine: BlockEngine::new_with_history(processor, block_size, block_size, iv)
+        }
+    }
+}
+
+impl <T: BlockDecryptor> Decryptor for CbcPkcsPaddingDecryptor<T> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+            -> Result<BufferResult, &'static str> {
+        self.block_engine.process(input, output, eof)
     }
 }
 
 #[cfg(test)]
-fn print_hex(d: &[u8]) {
-    for x in d.iter() {
-        print!("0x{:x} ", *x);
-    }
-    println("");
-}
-
-#[test]
-fn test_ecb_no_padding() {
-    use aessafe;
-    let key = [0u8, ..16];
-    let plaintext = [0u8, ..16];
-    let mut ciphertext = [0u8, ..16];
-    {
-        let mut rrb = RefReadBuffer::new(plaintext);
-        let mut rwb = RefWriteBuffer::new(ciphertext);
-        let aes = aessafe::AesSafe128Encryptor::new(key);
-        let mut ecb = EcbNoPaddingEncryptor::new(aes);
-        match ecb.encrypt(&mut rrb, &mut rwb, true) {
-            BufferUnderflow => {}
-            BufferOverflow => fail!("Yikes")
-        }
-    }
-}
-
-#[test]
-fn test_ecb_pkcs_padding() {
-    use aessafe;
-    let key = [0u8, ..16];
-    let plaintext = [0u8, ..16];
-    let mut ciphertext = [0u8, ..32];
-    {
-        let mut rrb = RefReadBuffer::new(plaintext);
-        let mut rwb = RefWriteBuffer::new(ciphertext);
-        let aes = aessafe::AesSafe128Encryptor::new(key);
-        let mut ecb = EcbPkcs7PaddingEncryptor::new(aes);
-        match ecb.encrypt(&mut rrb, &mut rwb, true) {
-            BufferUnderflow => {}
-            BufferOverflow => fail!("Yikes")
-        }
-    }
-}
-
-#[test]
-fn test_cbc_no_padding() {
-    use aessafe;
-    let key = [0u8, ..16];
-    let iv = [0u8, ..16];
-    let plaintext = [0u8, ..32];
-    let mut ciphertext = [0u8, ..32];
-    {
-        let mut rrb = RefReadBuffer::new(plaintext);
-        let mut rwb = RefWriteBuffer::new(ciphertext);
-        let aes = aessafe::AesSafe128Encryptor::new(key);
-        let mut cbc = CbcNoPaddingEncryptor::new(aes, iv);
-        match cbc.encrypt(&mut rrb, &mut rwb, true) {
-            BufferUnderflow => {}
-            BufferOverflow => fail!("Yikes")
-        }
-    }
-}
-
-#[test]
-fn test_cbc_pkcs_padding() {
-    use aessafe;
-    let key = [0u8, ..16];
-    let iv = [0u8, ..16];
-    let plaintext = [0u8, ..17];
-    let mut ciphertext = [0u8, ..32];
-    {
-        let mut rrb = RefReadBuffer::new(plaintext);
-        let mut rwb = RefWriteBuffer::new(ciphertext);
-        let aes = aessafe::AesSafe128Encryptor::new(key);
-        let mut cbc = CbcPkcs7PaddingEncryptor::new(aes, iv);
-        match cbc.encrypt(&mut rrb, &mut rwb, true) {
-            BufferUnderflow => {}
-            BufferOverflow => fail!("Yikes")
-        }
-    }
-}
-
-
-
-
-
-
-
-
-*/
-
-
-
-
-
-
-/*
-impl <T: BlockEncryptor> Encryptor for EcbBlockMode<T> {
-    fn encrypt(&mut self, input: &mut Buffer, output: &mut MutBuffer) -> BufferResult {
-        BufferUnderflow
-    }
-    fn encrypt_final(&mut self, input: &mut Buffer, output: &mut MutBuffer) -> BufferResult {
-        BufferUnderflow
-    }
-}
-
-*/
-
-
-
-
-
-
-
-
-
-#[cfg(test_OFF)]
 mod test {
     use aessafe;
-    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcs7PaddingEncryptor,
-        EcbPkcs7PaddingDecryptor};
+    use aesni;
+    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcsPaddingEncryptor,
+        EcbPkcsPaddingDecryptor, CbcNoPaddingEncryptor, CbcNoPaddingDecryptor,
+        CbcPkcsPaddingEncryptor, CbcPkcsPaddingDecryptor};
     use buffer::{RefReadBuffer, RefWriteBuffer};
     use symmetriccipher::{Encryptor, Decryptor};
 
     use std::vec;
+    use extra::test::BenchHarness;
 
     trait CipherTest {
         fn get_plain<'a>(&'a self) -> &'a [u8];
@@ -853,14 +695,14 @@ mod test {
     fn aes_cbc_no_padding_tests() -> ~[CbcTest] {
         ~[
             CbcTest {
-                key: ~[0, ..16],
-                iv: ~[0, ..16],
-                plain: ~[0, ..32],
+                key: ~[1, ..16],
+                iv: ~[3, ..16],
+                plain: ~[2, ..32],
                 cipher: ~[
-                    0x72, 0xe1, 0x63, 0xaf, 0x20, 0x38, 0x29, 0x1e,
-                    0x91, 0x1f, 0x86, 0xbb, 0x48, 0xca, 0xa9, 0x68,
-                    0x35, 0x01, 0xbc, 0x97, 0x4d, 0x74, 0xc5, 0x07,
-                    0xb8, 0x19, 0x67, 0x5e, 0x0b, 0x2d, 0xb8, 0xe3 ]
+                    0x5e, 0x77, 0xe5, 0x9f, 0x8f, 0x85, 0x94, 0x34,
+                    0x89, 0xa2, 0x41, 0x49, 0xc7, 0x5f, 0x4e, 0xc9,
+                    0xe0, 0x9a, 0x77, 0x36, 0xfb, 0xc8, 0xb2, 0xdc,
+                    0xb3, 0xfb, 0x9f, 0xc0, 0x31, 0x4c, 0xb0, 0xb1 ]
             }
         ]
     }
@@ -868,28 +710,28 @@ mod test {
     fn aes_cbc_pkcs_padding_tests() -> ~[CbcTest] {
         ~[
             CbcTest {
-                key: ~[0, ..16],
-                iv: ~[0, ..16],
-                plain: ~[0, ..32],
+                key: ~[1, ..16],
+                iv: ~[3, ..16],
+                plain: ~[2, ..32],
                 cipher: ~[
-                    0x79, 0xf2, 0x17, 0x8e, 0x3a, 0xcc, 0x12, 0xa2,
-                    0x37, 0x3e, 0x99, 0xbc, 0x32, 0xb6, 0x9e, 0xfe,
-                    0xef, 0x09, 0x08, 0x02, 0xc1, 0xa9, 0x28, 0x72,
-                    0xc5, 0x4d, 0x50, 0xd2, 0x63, 0x5b, 0x91, 0xf5,
-                    0xa0, 0x69, 0x8f, 0x4c, 0x25, 0x48, 0xab, 0x09,
-                    0xd6, 0x2d, 0xab, 0x35, 0xd2, 0x40, 0xa7, 0x89 ]
+                    0x5e, 0x77, 0xe5, 0x9f, 0x8f, 0x85, 0x94, 0x34,
+                    0x89, 0xa2, 0x41, 0x49, 0xc7, 0x5f, 0x4e, 0xc9,
+                    0xe0, 0x9a, 0x77, 0x36, 0xfb, 0xc8, 0xb2, 0xdc,
+                    0xb3, 0xfb, 0x9f, 0xc0, 0x31, 0x4c, 0xb0, 0xb1,
+                    0xa4, 0xc2, 0xe4, 0x62, 0xef, 0x7a, 0xe3, 0x7e,
+                    0xef, 0x88, 0xf3, 0x27, 0xbd, 0x9c, 0xc8, 0x4d ]
             },
             CbcTest {
-                key: ~[0, ..16],
-                iv: ~[0, ..16],
-                plain: ~[0, ..33],
+                key: ~[1, ..16],
+                iv: ~[3, ..16],
+                plain: ~[2, ..33],
                 cipher: ~[
-                    0x84, 0xd9, 0x09, 0x97, 0x8e, 0xb4, 0x93, 0xa4,
-                    0x9c, 0x74, 0xf1, 0xa9, 0xf1, 0x79, 0x20, 0xda,
-                    0xd6, 0x05, 0x89, 0xf4, 0x43, 0x64, 0xfd, 0x3b,
-                    0x49, 0x75, 0x7d, 0xc1, 0x63, 0x0a, 0xc3, 0x87,
-                    0x5d, 0x46, 0x4a, 0xea, 0xaa, 0x9a, 0x0d, 0x17,
-                    0x8a, 0xc1, 0x25, 0x59, 0x4c, 0x1e, 0xf6, 0x99 ]
+                    0x5e, 0x77, 0xe5, 0x9f, 0x8f, 0x85, 0x94, 0x34,
+                    0x89, 0xa2, 0x41, 0x49, 0xc7, 0x5f, 0x4e, 0xc9,
+                    0xe0, 0x9a, 0x77, 0x36, 0xfb, 0xc8, 0xb2, 0xdc,
+                    0xb3, 0xfb, 0x9f, 0xc0, 0x31, 0x4c, 0xb0, 0xb1,
+                    0x6c, 0x47, 0xcd, 0xec, 0xae, 0xbb, 0x1a, 0x65,
+                    0x04, 0xd2, 0x32, 0x23, 0xa6, 0x8d, 0x4a, 0x65 ]
             }
         ]
     }
@@ -903,14 +745,32 @@ mod test {
     }
 
     fn get_aes_ecb_pkcs_padding(test: &EcbTest)
-            -> (EcbPkcs7PaddingEncryptor<aessafe::AesSafe128Encryptor>,
-                EcbPkcs7PaddingDecryptor<aessafe::AesSafe128Decryptor>) {
+            -> (EcbPkcsPaddingEncryptor<aessafe::AesSafe128Encryptor>,
+                EcbPkcsPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
         let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
         let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
-        (EcbPkcs7PaddingEncryptor::new(aes_enc), EcbPkcs7PaddingDecryptor::new(aes_dec))
+        (EcbPkcsPaddingEncryptor::new(aes_enc), EcbPkcsPaddingDecryptor::new(aes_dec))
     }
 
-    fn run_test<T: CipherTest, E: Encryptor, D: Decryptor>(
+    fn get_aes_cbc_no_padding(test: &CbcTest)
+            -> (CbcNoPaddingEncryptor<aessafe::AesSafe128Encryptor>,
+                CbcNoPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
+        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+        (CbcNoPaddingEncryptor::new(aes_enc, test.iv.clone()),
+         CbcNoPaddingDecryptor::new(aes_dec, test.iv.clone()))
+    }
+
+    fn get_aes_cbc_pkcs_padding(test: &CbcTest)
+            -> (CbcPkcsPaddingEncryptor<aessafe::AesSafe128Encryptor>,
+                CbcPkcsPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
+        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+        (CbcPkcsPaddingEncryptor::new(aes_enc, test.iv.clone()),
+         CbcPkcsPaddingDecryptor::new(aes_dec, test.iv.clone()))
+    }
+
+    fn run_test_full<T: CipherTest, E: Encryptor, D: Decryptor>(
             test: &T,
             enc: &mut E,
             dec: &mut D) {
@@ -919,7 +779,8 @@ mod test {
             let mut buff_in = RefReadBuffer::new(test.get_plain());
             let mut buff_out = RefWriteBuffer::new(cipher_out);
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
-                BufferOverflow => fail!("Encryption not completed"),
+                Ok(BufferOverflow) => fail!("Encryption not completed"),
+                Err(_) => fail!("Error"),
                 _ => {}
             }
         }
@@ -930,7 +791,8 @@ mod test {
             let mut buff_in = RefReadBuffer::new(test.get_cipher());
             let mut buff_out = RefWriteBuffer::new(plain_out);
             match dec.decrypt(&mut buff_in, &mut buff_out, true) {
-                BufferOverflow => fail!("Decryption not completed"),
+                Ok(BufferOverflow) => fail!("Decryption not completed"),
+                Err(_) => fail!("Error"),
                 _ => {}
             }
         }
@@ -942,7 +804,7 @@ mod test {
         let tests = aes_ecb_no_padding_tests();
         for test in tests.iter() {
             let (mut enc, mut dec) = get_aes_ecb_no_padding(test);
-            run_test(test, &mut enc, &mut dec);
+            run_test_full(test, &mut enc, &mut dec);
         }
     }
 
@@ -951,8 +813,75 @@ mod test {
         let tests = aes_ecb_pkcs_padding_tests();
         for test in tests.iter() {
             let (mut enc, mut dec) = get_aes_ecb_pkcs_padding(test);
-            run_test(test, &mut enc, &mut dec);
+            run_test_full(test, &mut enc, &mut dec);
         }
+    }
+
+    #[test]
+    fn aes_cbc_no_padding() {
+        let tests = aes_cbc_no_padding_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_cbc_no_padding(test);
+            run_test_full(test, &mut enc, &mut dec);
+        }
+    }
+
+    #[test]
+    fn aes_cbc_pkcs_padding() {
+        let tests = aes_cbc_pkcs_padding_tests();
+        for test in tests.iter() {
+            let (mut enc, mut dec) = get_aes_cbc_pkcs_padding(test);
+            run_test_full(test, &mut enc, &mut dec);
+        }
+    }
+
+    #[bench]
+    pub fn aes_ecb_no_padding_bench(bh: &mut BenchHarness) {
+        let key = [1u8, ..16];
+        let plain = [3u8, ..512];
+        let mut cipher = [3u8, ..528];
+
+        // TODO - this isn't very useful!
+        bh.iter( || {
+            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+            let mut enc = EcbNoPaddingEncryptor::new(aes_enc);
+
+            let mut buff_in = RefReadBuffer::new(plain);
+            let mut buff_out = RefWriteBuffer::new(cipher);
+
+            match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferOverflow) => fail!("Encryption not completed"),
+                Err(_) => fail!("Error"),
+                _ => {}
+            }
+        });
+
+        bh.bytes = (plain.len()) as u64;
+    }
+
+    #[bench]
+    pub fn aes_cbc_pkcs_padding_bench(bh: &mut BenchHarness) {
+        let key = [1u8, ..16];
+        let iv = [2u8, ..16];
+        let plain = [3u8, ..512];
+        let mut cipher = [3u8, ..528];
+
+        // TODO - this isn't very useful!
+        bh.iter( || {
+            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+            let mut enc = CbcPkcsPaddingEncryptor::new(aes_enc, iv.to_owned());
+
+            let mut buff_in = RefReadBuffer::new(plain);
+            let mut buff_out = RefWriteBuffer::new(cipher);
+
+            match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferOverflow) => fail!("Encryption not completed"),
+                Err(_) => fail!("Error"),
+                _ => {}
+            }
+        });
+
+        bh.bytes = (plain.len()) as u64;
     }
 }
 

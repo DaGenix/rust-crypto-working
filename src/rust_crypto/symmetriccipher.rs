@@ -27,13 +27,15 @@ pub trait BlockDecryptorX8 {
 }
 
 pub trait Encryptor {
+    // TODO - Better error handling
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-        -> BufferResult;
+        -> Result<BufferResult, &'static str>;
 }
 
 pub trait Decryptor {
+    // TODO - Better error handling
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-        -> BufferResult;
+        -> Result<BufferResult, &'static str>;
 }
 
 pub trait SynchronousStreamCipher {

@@ -56,8 +56,6 @@ pub trait WriteBuffer {
         self.take_next(rem)
     }
     fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a>;
-
-    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint);
 }
 
 pub struct RefReadBuffer<'self> {
@@ -116,6 +114,11 @@ impl OwnedReadBuffer {
     }
     pub fn into_write_buffer(self) -> OwnedWriteBuffer {
         OwnedWriteBuffer::new(self.buff)
+    }
+    pub fn borrow_write_buffer<'a>(&'a mut self) -> BorrowedWriteBuffer<'a> {
+        self.pos = 0;
+        self.len = 0;
+        BorrowedWriteBuffer::new(self)
     }
 }
 
@@ -177,10 +180,55 @@ impl <'self> WriteBuffer for RefWriteBuffer<'self> {
         self.pos = 0;
         r
     }
-    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint) {
-        let (r, w) = self.buff.mut_split(self.pos);
-        let count = f(r, w);
+}
+
+pub struct BorrowedWriteBuffer<'self> {
+    parent: &'self mut OwnedReadBuffer,
+    pos: uint,
+    len: uint
+}
+
+impl <'self> BorrowedWriteBuffer<'self> {
+    fn new<'a>(parent: &'a mut OwnedReadBuffer) -> BorrowedWriteBuffer<'a> {
+        let buff_len = parent.buff.len();
+        BorrowedWriteBuffer {
+            parent: parent,
+            pos: 0,
+            len: buff_len
+        }
+    }
+}
+
+impl <'self> WriteBuffer for BorrowedWriteBuffer<'self> {
+    fn is_empty(&self) -> bool { self.pos == 0 }
+    fn is_full(&self) -> bool { self.pos == self.len }
+    fn remaining(&self) -> uint { self.len - self.pos }
+    fn capacity(&self) -> uint { self.len }
+
+    fn rewind(&mut self, distance: uint) {
+        self.pos -= distance;
+        self.parent.len -= distance;
+    }
+    fn reset(&mut self) {
+        self.pos = 0;
+        self.parent.len = 0;
+    }
+
+    fn peek_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
+        RefReadBuffer::new(self.parent.buff.slice_to(self.pos))
+    }
+
+    fn take_next<'a>(&'a mut self, count: uint) -> &'a mut [u8] {
+        let r = self.parent.buff.mut_slice(self.pos, self.pos + count);
         self.pos += count;
+        self.parent.len += count;
+        r
+    }
+    fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a> {
+        let r = RefReadBuffer::new(self.parent.buff.slice_to(self.pos));
+        self.pos = 0;
+        self.parent.len = 0;
+        r
     }
 }
 
@@ -227,10 +275,5 @@ impl WriteBuffer for OwnedWriteBuffer {
         let r = RefReadBuffer::new(self.buff.slice_to(self.pos));
         self.pos = 0;
         r
-    }
-    fn read_and_write(&mut self, f: |&[u8], &mut [u8]| -> uint) {
-        let (r, w) = self.buff.mut_split(self.pos);
-        let count = f(r, w);
-        self.pos += count;
     }
 }

@@ -153,6 +153,7 @@ unsafe fn aesimc(round_keys: *u8) {
 }
 
 #[inline(never)]
+#[allow(dead_assignment)]
 fn setup_working_key_aesni_128(key: &[u8], key_type: KeyType, round_key: &mut [u8]) {
     unsafe {
         let mut round_keysp: *u8 = round_key.unsafe_ref(0);
@@ -221,6 +222,7 @@ fn setup_working_key_aesni_128(key: &[u8], key_type: KeyType, round_key: &mut [u
 }
 
 #[inline(never)]
+#[allow(dead_assignment)]
 fn setup_working_key_aesni_192(key: &[u8], key_type: KeyType, round_key: &mut [u8]) {
     unsafe {
         let mut round_keysp: *u8 = round_key.unsafe_ref(0);
@@ -324,6 +326,7 @@ fn setup_working_key_aesni_192(key: &[u8], key_type: KeyType, round_key: &mut [u
 }
 
 #[inline(never)]
+#[allow(dead_assignment)]
 fn setup_working_key_aesni_256(key: &[u8], key_type: KeyType, round_key: &mut [u8]) {
     unsafe {
         let mut round_keysp: *u8 = round_key.unsafe_ref(0);
@@ -435,6 +438,7 @@ fn setup_working_key_aesni_256(key: &[u8], key_type: KeyType, round_key: &mut [u
 }
 
 #[inline(never)]
+#[allow(dead_assignment)]
 fn encrypt_block_aseni(rounds: uint, input: &[u8], round_keys: &[u8], output: &mut [u8]) {
     unsafe {
         let mut rounds = rounds;
@@ -477,6 +481,7 @@ fn encrypt_block_aseni(rounds: uint, input: &[u8], round_keys: &[u8], output: &m
 }
 
 #[inline(never)]
+#[allow(dead_assignment)]
 fn decrypt_block_aseni(rounds: uint, input: &[u8], round_keys: &[u8], output: &mut [u8]) {
     unsafe {
         let mut rounds = rounds;

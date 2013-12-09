@@ -7,6 +7,7 @@
 // This should go in either 'sys' or 'os'
 #[cfg(target_arch = "x86")]
 #[cfg(target_arch = "x86_64")]
+#[allow(dead_assignment)]
 fn cpuid(func: u32) -> (u32, u32, u32, u32) {
     let mut a = 0u32;
     let mut b = 0u32;

@@ -17,17 +17,16 @@ fn cpuid(func: u32) -> (u32, u32, u32, u32) {
     unsafe {
         asm!(
         "
-        movl $4, %eax;
+        mov $4, %eax;
         cpuid;
-        movl %eax, $0;
-        movl %ebx, $1;
-        movl %ecx, $2;
-        movl %edx, $3;
+        mov %eax, $0;
+        mov %ebx, $1;
+        mov %ecx, $2;
+        mov %edx, $3;
         "
         : "=r" (a), "=r" (b), "=r" (c), "=r" (d)
         : "r" (func)
         : "eax", "ebx", "ecx", "edx"
-        : "volatile"
         )
     }
 

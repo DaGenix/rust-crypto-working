@@ -4,6 +4,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// TODO - Optimize the XORs
+// TODO - Try to speed up CBC modes by reducing buffer copies (history for output?)
+
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
 use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor};

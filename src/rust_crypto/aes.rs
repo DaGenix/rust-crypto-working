@@ -269,6 +269,44 @@ define_dec!(
 
 */
 
+
+/*
+use aessafe;
+use blockmodes;
+use symmetriccipher::{Encryptor, Decryptor};
+use util::supports_aesni;
+
+use std;
+
+#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+pub fn aes_128_ecb_encryptor(key: &[u8]) -> ~Encryptor {
+    use aesni;
+    if supports_aesni() {
+        let m = aesni::AesNi128Encryptor::new(key);
+        ~blockmodes::EcbNoPaddingEncryptor::new(m) as ~Encryptor
+    } else {
+        let m = aessafe::AesSafe128Encryptor::new(key);
+        ~blockmodes::EcbNoPaddingEncryptor::new(m) as ~Encryptor
+    }
+}
+
+trait T {
+    fn t(&self);
+}
+
+struct S<'self, N> { val: &'self N }
+
+impl <'self, N: std::fmt::Default> T for S<'self, N> {
+    fn t(&self) { println!("val: {}", *self.val); }
+}
+
+fn test() -> ~T {
+    let x = 1;
+    ~S {val: &x} as ~T
+}
+*/
+
 #[cfg(test)]
 mod test {
 //    use aes::*;
@@ -606,7 +644,6 @@ mod bench {
             a.encrypt_block_x8(plain, tmp);
         });
 
-        // HACK: Multiply by 100 to get fractional MB/s reported
-        bh.bytes = (plain.len() * 100) as u64;
+        bh.bytes = (plain.len()) as u64;
     }
 }

@@ -397,24 +397,6 @@ macro_rules! impl_fixed_buffer( ($name:ident, $size:expr) => (
     }
 ))
 
-/// A fixed size buffer of 16 bytes useful for cryptographic operations.
-pub struct FixedBuffer16 {
-    priv buffer: [u8, ..16],
-    priv buffer_idx: uint,
-}
-
-impl FixedBuffer16 {
-    /// Create a new buffer
-    pub fn new() -> FixedBuffer16 {
-        return FixedBuffer16 {
-            buffer: [0u8, ..16],
-            buffer_idx: 0
-        };
-    }
-}
-
-impl_fixed_buffer!(FixedBuffer16, 16)
-
 /// A fixed size buffer of 64 bytes useful for cryptographic operations.
 pub struct FixedBuffer64 {
     priv buffer: [u8, ..64],

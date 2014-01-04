@@ -315,7 +315,7 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     use aesni::*;
 
-    use aessafe::*;
+    use aessafe;
     use symmetriccipher::*;
     use util::*;
 
@@ -527,8 +527,8 @@ mod test {
     fn testAesSafe128() {
         let tests = tests128();
         for t in tests.iter() {
-            let mut enc = AesSafe128Encryptor::new(t.key);
-            let mut dec = AesSafe128Decryptor::new(t.key);
+            let mut enc = aessafe::AesSafe128Encryptor::new(t.key);
+            let mut dec = aessafe::AesSafe128Decryptor::new(t.key);
             run_test(&mut enc, &mut dec, t);
         }
     }
@@ -537,8 +537,8 @@ mod test {
     fn testAesSafe192() {
         let tests = tests192();
         for t in tests.iter() {
-            let mut enc = AesSafe192Encryptor::new(t.key);
-            let mut dec = AesSafe192Decryptor::new(t.key);
+            let mut enc = aessafe::AesSafe192Encryptor::new(t.key);
+            let mut dec = aessafe::AesSafe192Decryptor::new(t.key);
             run_test(&mut enc, &mut dec, t);
         }
     }
@@ -547,8 +547,8 @@ mod test {
     fn testAesSafe256() {
         let tests = tests256();
         for t in tests.iter() {
-            let mut enc = AesSafe256Encryptor::new(t.key);
-            let mut dec = AesSafe256Decryptor::new(t.key);
+            let mut enc = aessafe::AesSafe256Encryptor::new(t.key);
+            let mut dec = aessafe::AesSafe256Decryptor::new(t.key);
             run_test(&mut enc, &mut dec, t);
         }
     }
@@ -593,8 +593,8 @@ mod test {
             0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60,
             0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97 ];
 
-        let enc = AesSafe128EncryptorX8::new(key);
-        let dec = AesSafe128DecryptorX8::new(key);
+        let enc = aessafe::AesSafe128EncryptorX8::new(key);
+        let dec = aessafe::AesSafe128DecryptorX8::new(key);
         let mut tmp = [0u8, ..128];
         enc.encrypt_block_x8(plain, tmp);
         assert!(tmp == cipher);
@@ -607,7 +607,7 @@ mod test {
 mod bench {
     use extra::test::BenchHarness;
 
-    use aessafe::*;
+    use aessafe;
     use symmetriccipher::*;
 
     #[bench]
@@ -620,7 +620,7 @@ mod bench {
         // Safe (S-boxes bitspliced only; not working): 6 MB/s
         // Safe (bs) - 10 MB/s!
 
-        let a = AesSafe128Encryptor::new(key);
+        let a = aessafe::AesSafe128Encryptor::new(key);
 
         let mut tmp = [0u8, ..16];
 
@@ -636,7 +636,7 @@ mod bench {
         let key: [u8, ..16] = [1u8, ..16];
         let plain: [u8, ..128] = [2u8, ..128];
 
-        let a = AesSafe128EncryptorX8::new(key);
+        let a = aessafe::AesSafe128EncryptorX8::new(key);
 
         let mut tmp = [0u8, ..128];
 

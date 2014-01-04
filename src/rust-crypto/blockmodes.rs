@@ -81,8 +81,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
         let update_history = |last_in: &[u8]| {
             vec::bytes::copy_memory(
                 self.hist_scratch,
-                last_in.slice_from(last_in.len() - self.hist_size),
-                self.hist_size);
+                last_in.slice_from(last_in.len() - self.hist_size));
         };
         let try_complete = |next_input_ok: bool, next_iter_ok: bool| {
             if next_iter_ok {
@@ -197,8 +196,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
                                 next_out);
                             vec::bytes::copy_memory(
                                 self.hist_scratch,
-                                next_in.slice_from(self.in_size - self.hist_size),
-                                self.hist_size);
+                                next_in.slice_from(self.in_size - self.hist_size));
                         }
 
                         if eof && input.remaining() < self.in_size {
@@ -284,7 +282,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
     }
     fn reset_with_history(&mut self, history: &[u8]) {
         self.reset();
-        vec::bytes::copy_memory(self.hist_scratch, history, self.hist_size);
+        vec::bytes::copy_memory(self.hist_scratch, history);
     }
     fn get_mut_processor<'a>(&'a mut self) -> &'a mut P { &mut self.processor }
 }
@@ -478,7 +476,7 @@ struct CbcNoPaddingEncryptorProcessor<T> {
 
 impl <T> CbcNoPaddingEncryptorProcessor<T> {
     fn reset(&mut self, iv: &[u8]) {
-        vec::bytes::copy_memory(self.temp1, iv, iv.len());
+        vec::bytes::copy_memory(self.temp1, iv);
     }
 }
 
@@ -488,7 +486,7 @@ impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
             *o = *x ^ *y;
         }
         self.algo.encrypt_block(self.temp2, self.temp1);
-        vec::bytes::copy_memory(output, self.temp1, self.algo.block_size());
+        vec::bytes::copy_memory(output, self.temp1);
     }
     fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
         input_buffer.is_empty()
@@ -576,7 +574,7 @@ struct CbcPkcsPaddingEncryptorProcessor<T> {
 
 impl <T> CbcPkcsPaddingEncryptorProcessor<T> {
     fn reset(&mut self, iv: &[u8]) {
-        vec::bytes::copy_memory(self.temp1, iv, iv.len());
+        vec::bytes::copy_memory(self.temp1, iv);
     }
 }
 
@@ -586,7 +584,7 @@ impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> 
             *o = *x ^ *y;
         }
         self.algo.encrypt_block(self.temp2, self.temp1);
-        vec::bytes::copy_memory(output, self.temp1, self.algo.block_size());
+        vec::bytes::copy_memory(output, self.temp1);
     }
     fn last_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) -> bool {
         add_pkcs_padding(input_buffer)
@@ -709,7 +707,7 @@ impl <A: BlockEncryptor> CtrMode<A> {
         }
     }
     fn reset(&mut self, ctr: &[u8]) {
-        vec::bytes::copy_memory(self.ctr, ctr, self.algo.block_size());
+        vec::bytes::copy_memory(self.ctr, ctr);
         self.bytes.reset();
     }
 }
@@ -755,7 +753,7 @@ pub struct CtrModeX8<A> {
 
 fn construct_ctr_x8(in_ctr: &[u8], out_ctr_x8: &mut [u8]) {
     for (i, ctr_i) in out_ctr_x8.mut_chunks(in_ctr.len()).enumerate() {
-        vec::bytes::copy_memory(ctr_i, in_ctr, in_ctr.len());
+        vec::bytes::copy_memory(ctr_i, in_ctr);
         add_ctr(ctr_i, i as u8);
     }
 }

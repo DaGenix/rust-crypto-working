@@ -99,7 +99,7 @@ mod test {
         for t in tests.iter() {
             let mut rc4 = Rc4::new(t.key.as_bytes());
             let mut result = vec::from_elem(t.output.len(), 0u8);
-            vec::bytes::copy_memory(result, t.input.as_bytes(), t.input.len());
+            vec::bytes::copy_memory(result, t.input.as_bytes());
             rc4.generate(result);
             assert!(result == t.output);
         }

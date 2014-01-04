@@ -34,7 +34,7 @@ pub trait ReadBuffer {
 
     fn push_to<W: WriteBuffer>(&mut self, output: &mut W) {
         let count = num::min(output.remaining(), self.remaining());
-        vec::bytes::copy_memory(output.take_next(count), self.take_next(count), count);
+        vec::bytes::copy_memory(output.take_next(count), self.take_next(count));
     }
 }
 

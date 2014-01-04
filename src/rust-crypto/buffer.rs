@@ -58,12 +58,12 @@ pub trait WriteBuffer {
     fn take_read_buffer<'a>(&'a mut self) -> RefReadBuffer<'a>;
 }
 
-pub struct RefReadBuffer<'self> {
-    buff: &'self [u8],
+pub struct RefReadBuffer<'a> {
+    buff: &'a [u8],
     pos: uint
 }
 
-impl <'self> RefReadBuffer<'self> {
+impl <'a> RefReadBuffer<'a> {
     pub fn new<'a>(buff: &'a [u8]) -> RefReadBuffer<'a> {
         RefReadBuffer {
             buff: buff,
@@ -72,7 +72,7 @@ impl <'self> RefReadBuffer<'self> {
     }
 }
 
-impl <'self> ReadBuffer for RefReadBuffer<'self> {
+impl <'a> ReadBuffer for RefReadBuffer<'a> {
     fn is_empty(&self) -> bool { self.pos == self.buff.len() }
     fn is_full(&self) -> bool { self.pos == 0 }
     fn remaining(&self) -> uint { self.buff.len() - self.pos }
@@ -140,13 +140,13 @@ impl ReadBuffer for OwnedReadBuffer {
     }
 }
 
-pub struct RefWriteBuffer<'self> {
-    buff: &'self mut [u8],
+pub struct RefWriteBuffer<'a> {
+    buff: &'a mut [u8],
     len: uint,
     pos: uint
 }
 
-impl <'self> RefWriteBuffer<'self> {
+impl <'a> RefWriteBuffer<'a> {
     pub fn new<'a>(buff: &'a mut [u8]) -> RefWriteBuffer<'a> {
         let len = buff.len();
         RefWriteBuffer {
@@ -157,7 +157,7 @@ impl <'self> RefWriteBuffer<'self> {
     }
 }
 
-impl <'self> WriteBuffer for RefWriteBuffer<'self> {
+impl <'a> WriteBuffer for RefWriteBuffer<'a> {
     fn is_empty(&self) -> bool { self.pos == 0 }
     fn is_full(&self) -> bool { self.pos == self.len }
     fn remaining(&self) -> uint { self.len - self.pos }
@@ -182,13 +182,13 @@ impl <'self> WriteBuffer for RefWriteBuffer<'self> {
     }
 }
 
-pub struct BorrowedWriteBuffer<'self> {
-    parent: &'self mut OwnedReadBuffer,
+pub struct BorrowedWriteBuffer<'a> {
+    parent: &'a mut OwnedReadBuffer,
     pos: uint,
     len: uint
 }
 
-impl <'self> BorrowedWriteBuffer<'self> {
+impl <'a> BorrowedWriteBuffer<'a> {
     fn new<'a>(parent: &'a mut OwnedReadBuffer) -> BorrowedWriteBuffer<'a> {
         let buff_len = parent.buff.len();
         BorrowedWriteBuffer {
@@ -199,7 +199,7 @@ impl <'self> BorrowedWriteBuffer<'self> {
     }
 }
 
-impl <'self> WriteBuffer for BorrowedWriteBuffer<'self> {
+impl <'a> WriteBuffer for BorrowedWriteBuffer<'a> {
     fn is_empty(&self) -> bool { self.pos == 0 }
     fn is_full(&self) -> bool { self.pos == self.len }
     fn remaining(&self) -> uint { self.len - self.pos }

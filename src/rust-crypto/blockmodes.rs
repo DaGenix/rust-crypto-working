@@ -814,7 +814,6 @@ impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
 #[cfg(test)]
 mod test {
     use aessafe;
-    use aesni;
     use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcsPaddingEncryptor,
         EcbPkcsPaddingDecryptor, CbcNoPaddingEncryptor, CbcNoPaddingDecryptor,
         CbcPkcsPaddingEncryptor, CbcPkcsPaddingDecryptor, CtrMode, CtrModeX8};
@@ -1118,7 +1117,7 @@ mod test {
         let plain = [3u8, ..512];
         let mut cipher = [3u8, ..528];
 
-        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let aes_enc = aessafe::AesSafe128Encryptor::new(key);
         let mut enc = EcbNoPaddingEncryptor::new(aes_enc);
 
         bh.iter( || {
@@ -1144,7 +1143,7 @@ mod test {
         let plain = [3u8, ..512];
         let mut cipher = [3u8, ..528];
 
-        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let aes_enc = aessafe::AesSafe128Encryptor::new(key);
         let mut enc = CbcPkcsPaddingEncryptor::new(aes_enc, iv.to_owned());
 
         bh.iter( || {
@@ -1170,7 +1169,7 @@ mod test {
         let plain = [3u8, ..512];
         let mut cipher = [3u8, ..528];
 
-        let aes_enc = aesni::AesNi128Encryptor::new(key);
+        let aes_enc = aessafe::AesSafe128Encryptor::new(key);
         let mut enc = CtrMode::new(aes_enc, ctr.to_owned());
 
         bh.iter( || {

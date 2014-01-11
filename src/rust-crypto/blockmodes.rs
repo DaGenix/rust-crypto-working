@@ -13,6 +13,23 @@ use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecrypto
 
 use std::vec;
 
+
+
+
+
+
+        fn printvec(vec: &[u8]) {
+            print!("[");
+            for &x in vec.iter() {
+                print!("0x{:x}, ", x);
+            }
+            println!("]");
+        }
+
+
+
+
+
 trait BlockProcessor {
     /// Process a block of data
     fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]);
@@ -597,7 +614,8 @@ fn strip_pkcs_padding<R: ReadBuffer>(output_buffer: &mut R) -> bool {
             }
         }
     }
-    output_buffer.rewind(last_byte as uint);
+//    output_buffer.rewind(last_byte as uint);
+    output.truncate(...);
     true
 }
 
@@ -1319,6 +1337,16 @@ mod test {
                 _ => {}
             }
         }
+        fn printvec(vec: &[u8]) {
+            print!("[");
+            for &x in vec.iter() {
+                print!("0x{:x}, ", x);
+            }
+            println!("]");
+        }
+
+        println!("Expected: "); printvec(test.get_cipher());
+        println!("Actual  : "); printvec(cipher_out);
         assert!(test.get_cipher() == cipher_out);
 
         let mut plain_out = vec::from_elem(test.get_plain().len(), 0u8);

@@ -19,6 +19,7 @@ pub trait ReadBuffer {
     fn capacity(&self) -> uint;
 
     fn rewind(&mut self, distance: uint);
+    fn truncate(&mut self, amm: uint);
     fn reset(&mut self);
 
     fn peek_next<'a>(&'a self, count: uint) -> &'a [u8];
@@ -128,7 +129,7 @@ impl ReadBuffer for OwnedReadBuffer {
     fn remaining(&self) -> uint { self.len - self.pos }
     fn capacity(&self) -> uint { self.len }
 
-    fn rewind(&mut self, distance: uint) { self.pos -= distance; }
+    fn rewind(&mut self, distance: uint) { self.pos -= distance; assert!(self.pos < 10000); }
     fn reset(&mut self) { self.pos = 0; }
 
     fn peek_next<'a>(&'a self, count: uint) -> &'a [u8] { self.buff.slice(self.pos, count) }

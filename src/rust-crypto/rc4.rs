@@ -58,6 +58,7 @@ impl SynchronousStreamCipher for Rc4 {
 #[cfg(test)]
 mod test {
     use std::vec;
+    use symmetriccipher::SynchronousStreamCipher;
     use rc4::Rc4;
 
     struct Test {
@@ -109,6 +110,7 @@ mod test {
 #[cfg(test)]
 mod bench {
     use extra::test::BenchHarness;
+    use symmetriccipher::SynchronousStreamCipher;
     use rc4::Rc4;
 
     #[bench]

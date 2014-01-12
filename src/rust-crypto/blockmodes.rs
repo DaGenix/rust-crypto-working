@@ -6,21 +6,25 @@
 
 // TODO - Optimize the XORs
 
-use std;
+use std::vec;
+
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
 use cryptoutil::symm_enc_or_dec;
 use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor,
     SynchronousStreamCipher, SymmetricCipherError, InvalidPadding, InvalidLength};
 
-use std::vec;
-
+/// The BlockProcessor trait is used to implement modes that require processing complete blocks of
+/// data. The methods of this trait are called by the BlockEngine which is in charge of properly
+/// buffering input data.
 trait BlockProcessor {
-    /// Process a block of data
+    /// Process a block of data. The in_hist and out_hist parameters represent the input and output
+    /// when the last block was processed. These values are necessary for certain modes.
     fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]);
 
     /// Add padding to the last block of input data
-    /// If the input_buffer is not full or empty after this function returns, the processing fails
+    /// If the mode can't handle a non-full block, it signals that error by simply leaving the block
+    /// as it is which will be detected as an InvalidLength error.
     #[allow(unused_variable)]
     fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
 
@@ -30,6 +34,8 @@ trait BlockProcessor {
     fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool { true }
 }
 
+/// The BlockEngine is implemented as a state machine with the following states. See comments in the
+/// BlockEngine code for more information on the states.
 enum BlockEngineState {
     FastMode,
     NeedInput,
@@ -40,19 +46,36 @@ enum BlockEngineState {
     Error(SymmetricCipherError)
 }
 
+/// BlockEngine buffers input and output data and handles sending complete block of data to the
+/// Processor object. Additionally, BlockEngine handles logic necessary to add or remove padding by
+/// calling the appropriate methods on the Processor object.
 struct BlockEngine<P> {
+    /// The block sized expected by the Processor
     block_size: uint,
 
+    /// in_hist and out_hist keep track of data that was input to and output from the last
+    /// invocation of the process_block() method of the Processor. Depending on the mode, these may
+    /// be empty vectors if history is not needed.
     in_hist: ~[u8],
     out_hist: ~[u8],
 
+    /// If some input data is supplied, but not a complete blocks worth, it is stored in this buffer
+    /// until enough arrives that it can be passed to the process_block() method of the Processor.
     in_scratch: OwnedWriteBuffer,
 
+    /// If input data is processed but there isn't enough space in the output buffer to store it,
+    /// it is written into out_write_scratch. OwnedWriteBuffer's may be converted into
+    /// OwnedReaderBuffers without re-allocating, so, after being written, out_write_scratch is
+    /// turned into out_read_scratch. After that, if is written to the output as more output becomes
+    /// available. The main point is - only out_write_scratch or out_read_scratch contains a value
+    /// at any given time; never both.
     out_write_scratch: Option<OwnedWriteBuffer>,
     out_read_scratch: Option<OwnedReadBuffer>,
 
+    /// The processor that implements the particular block mode.
     processor: P,
 
+    /// The current state of the operation.
     state: BlockEngineState
 }
 
@@ -72,6 +95,8 @@ fn update_history(in_hist: &mut [u8], out_hist: &mut [u8], last_in: &[u8], last_
 }
 
 impl <P: BlockProcessor> BlockEngine<P> {
+    /// Create a new BlockProcessor instance with the given processor and block_size. No history
+    /// will be saved.
     fn new(processor: P, block_size: uint) -> BlockEngine<P> {
         BlockEngine {
             block_size: block_size,
@@ -84,6 +109,9 @@ impl <P: BlockProcessor> BlockEngine<P> {
             state: FastMode
         }
     }
+
+    /// Create a new BlockProcessor instance with the given processor, block_size, and initial input
+    /// and output history.
     fn new_with_history(
             processor: P,
             block_size: uint,
@@ -95,6 +123,10 @@ impl <P: BlockProcessor> BlockEngine<P> {
             ..BlockEngine::new(processor, block_size)
         }
     }
+
+    /// This implements the FastMode state. Ideally, the encryption or decryption operation should
+    /// do the bulk of its work in FastMode. Significantly, FastMode avoids doing copies as much as
+    /// possible. The FastMode state does not handle the final block of data.
     fn fast_mode<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
@@ -110,8 +142,8 @@ impl <P: BlockProcessor> BlockEngine<P> {
             (vec.slice_to(at), vec.slice_from(at))
         }
 
-        // First block processing. We have to retrieve the history information from
-        // self.in_hist and self.out_hist.
+        // First block processing. We have to retrieve the history information from self.in_hist and
+        // self.out_hist.
         if !has_next() {
             if input.is_empty() {
                 return FastMode;
@@ -128,8 +160,8 @@ impl <P: BlockProcessor> BlockEngine<P> {
                 next_out);
         }
 
-        // Process all remaing blocks. We can pull the history out of the buffers without having
-        // to do any copies
+        // Process all remaing blocks. We can pull the history out of the buffers without having to
+        // do any copies
         let next_in_size = self.in_hist.len() + self.block_size;
         let next_out_size = self.out_hist.len() + self.block_size;
         while has_next() {
@@ -159,11 +191,15 @@ impl <P: BlockProcessor> BlockEngine<P> {
             return NeedInput;
         }
     }
+
+    /// This method implements the BlockEngine state machine.
     fn process<R: ReadBuffer, W: WriteBuffer>(
             &mut self,
             input: &mut R,
             output: &mut W,
             eof: bool) -> Result<BufferResult, SymmetricCipherError> {
+        // Process a block of data from in_scratch and write the result to out_write_scratch.
+        // Finally, convert out_write_scratch into out_read_scratch.
         let process_scratch = || {
             let mut rin = self.in_scratch.take_read_buffer();
             let mut wout = self.out_write_scratch.take_unwrap();
@@ -185,18 +221,26 @@ impl <P: BlockProcessor> BlockEngine<P> {
 
         loop {
             match self.state {
+                // FastMode tries to process as much data as possible while minimizing copies.
+                // FastMode doesn't make use of the scratch buffers and only updates the history
+                // just before exiting.
                 FastMode => {
                     self.state = self.fast_mode(input, output);
                     match self.state {
                         FastMode => {
-                            // TODO - Is this check necessary?
-                            if input.is_empty() {
-                                return Ok(BufferUnderflow);
-                            }
+                            // If FastMode completes but stays in the FastMode state, it means that
+                            // we've run out of input data.
+                            return Ok(BufferUnderflow);
                         }
                         _ => {}
                     }
                 }
+
+                // The NeedInput mode is entered when there isn't enough data to run in FastMode
+                // anymore. Input data is buffered in in_scratch until there is a full block or eof
+                // occurs. IF eof doesn't occur, the data is processed and then we go to the
+                // NeedOutput state. Otherwise, we go to the LastInput state. This state always
+                // writes all available data into in_scratch before transitioning to the next state.
                 NeedInput => {
                     input.push_to(&mut self.in_scratch);
                     if !input.is_empty() {
@@ -212,6 +256,9 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         }
                     }
                 }
+
+                // The NeedOutput state just writes buffered processed data to the output stream
+                // until all of it has been written.
                 NeedOutput => {
                     let mut rout = self.out_read_scratch.take_unwrap();
                     rout.push_to(output);
@@ -223,19 +270,37 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         return Ok(BufferOverflow);
                     }
                 }
-                LastInput => {
-                    // When we first arrive in this state, we know that all input from the user has
-                    // been consumed, so, we don't have to look at input anymore. in_scratch may
-                    // be in one of 3 states - 1) empty 2) partially filled or 3) filled.
-                    // Each state must be handled differently
-                    // 1) This state is only possible if there never was any input data. If there
-                    //    was any input data at all, this will not occur. Anyway, processing is
-                    //    simple - first pad_input() and then process the buffer if it is full.
-                    // 2) call pad_input() and then process the buffer, which must be full.
-                    // 3) process the buffer. Then, call pad_input on a new empty buffer. If
-                    //    pad_input doesn't fill it, then call strip_output() on the first buffer.
-                    //    Otherwise, process the buffer and then call strip_output() on it.
 
+                // None of the other states are allowed to process the last block of data since
+                // last block handling is a little tricky due to modes have special needs regarding
+                // padding. When the last block of data is detected, this state is transitioned to
+                // for handling.
+                LastInput => {
+                    // We we arrive in this state, we know that all input data that is going to be
+                    // supplied has been suplied and that that data has been written to in_scratch
+                    // by the NeedInput state. Furthermore, we know that one of three things must be
+                    // true about in_scratch:
+                    // 1) It is empty. This only occurs if the input is zero length. We can do last
+                    //    block processing by executing the pad_input() method of the processor
+                    //    which may either pad out to a full block or leave it empty, process the
+                    //    data if it was padded out to a full block, and then pass it to
+                    //    strip_output().
+                    // 2) It is partially filled. This will occur if the input data was not a
+                    //    multiple of the block size. Processing proceeds identically to case #1.
+                    // 3) It is full. This case occurs when the input data was a multiple of the
+                    //    block size. This case is a little trickier, since, depending on the mode,
+                    //    we might actually have 2 blocks worth of data to process - the last user
+                    //    supplied block (currently in in_scratch) and then another block that could
+                    //    be added as padding. Processing proceeds by first processing the data in
+                    //    in_scratch and writing it to out_scratch. Then, the now-empty in_scratch
+                    //    buffer is passed to pad_input() which may leave it empty or write a block
+                    //    of padding to it. If no padding is added, processing proceeds as in cases
+                    //    #1 and #2. However, if padding is added, now have data in in_scratch and
+                    //    also in out_scratch meaning that we can't immediately process the padding
+                    //    data since we have nowhere to put it. So, we transition to the LastInput2
+                    //    state which will first write out the last non-padding block, then process
+                    //    the padding block (in in_scratch) and write it to the now-empty
+                    //    out_scratch.
                     if !self.in_scratch.is_full() {
                         self.processor.pad_input(&mut self.in_scratch);
                         if self.in_scratch.is_full() {
@@ -266,6 +331,10 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         }
                     }
                 }
+
+                // See the comments on LastInput for more details. This state handles final blocks
+                // of data in the case that the input was a multiple of the block size and the mode
+                // decided to add a full extra block of padding.
                 LastInput2 => {
                     let mut rout = self.out_read_scratch.take_unwrap();
                     rout.push_to(output);
@@ -282,6 +351,9 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         return Ok(BufferOverflow);
                     }
                 }
+
+                // The Finished mode just writes the data in out_scratch to the output until there
+                // is no more data left.
                 Finished => {
                     match self.out_read_scratch {
                         Some(ref mut rout) => {
@@ -295,6 +367,8 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         None => { return Ok(BufferUnderflow); }
                     }
                 }
+
+                // The Error state is used to store error information.
                 Error(err) => {
                     return Err(err);
                 }

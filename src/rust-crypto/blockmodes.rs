@@ -304,7 +304,6 @@ impl <P: BlockProcessor> BlockEngine<P> {
         vec::bytes::copy_memory(self.in_hist, in_hist);
         vec::bytes::copy_memory(self.out_hist, out_hist);
     }
-    fn get_mut_processor<'a>(&'a mut self) -> &'a mut P { &mut self.processor }
 }
 
 fn add_pkcs_padding<W: WriteBuffer>(input_buffer: &mut W) {
@@ -482,23 +481,15 @@ impl <T: BlockDecryptor> Decryptor for EcbPkcsPaddingDecryptor<T> {
 
 struct CbcNoPaddingEncryptorProcessor<T> {
     algo: T,
-    temp1: ~[u8],
-    temp2: ~[u8]
-}
-
-impl <T> CbcNoPaddingEncryptorProcessor<T> {
-    fn reset(&mut self, iv: &[u8]) {
-        vec::bytes::copy_memory(self.temp1, iv);
-    }
+    temp: ~[u8]
 }
 
 impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
-        for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
-            *o = *x ^ *y;
+    fn process_block(&mut self, _: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]) {
+        for ((&x, &y), o) in input.iter().zip(out_hist.iter()).zip(self.temp.mut_iter()) {
+            *o = x ^ y;
         }
-        self.algo.encrypt_block(self.temp2, self.temp1);
-        vec::bytes::copy_memory(output, self.temp1);
+        self.algo.encrypt_block(self.temp, output);
     }
 }
 
@@ -511,16 +502,14 @@ impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
         let block_size = algo.block_size();
         let processor = CbcNoPaddingEncryptorProcessor {
             algo: algo,
-            temp1: iv,
-            temp2: vec::from_elem(block_size, 0u8)
+            temp: vec::from_elem(block_size, 0u8)
         };
         CbcNoPaddingEncryptor {
-            block_engine: BlockEngine::new(processor, block_size)
+            block_engine: BlockEngine::new_with_history(processor, block_size, ~[], iv)
         }
     }
     pub fn reset(&mut self, iv: &[u8]) {
-        self.block_engine.reset();
-        self.block_engine.get_mut_processor().reset(iv);
+        self.block_engine.reset_with_history(&[], iv);
     }
 }
 
@@ -574,23 +563,15 @@ impl <T: BlockDecryptor> Decryptor for CbcNoPaddingDecryptor<T> {
 
 struct CbcPkcsPaddingEncryptorProcessor<T> {
     algo: T,
-    temp1: ~[u8],
-    temp2: ~[u8]
-}
-
-impl <T> CbcPkcsPaddingEncryptorProcessor<T> {
-    fn reset(&mut self, iv: &[u8]) {
-        vec::bytes::copy_memory(self.temp1, iv);
-    }
+    temp: ~[u8]
 }
 
 impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
-        for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
-            *o = *x ^ *y;
+    fn process_block(&mut self, _: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]) {
+        for ((&x, &y), o) in input.iter().zip(out_hist.iter()).zip(self.temp.mut_iter()) {
+            *o = x ^ y;
         }
-        self.algo.encrypt_block(self.temp2, self.temp1);
-        vec::bytes::copy_memory(output, self.temp1);
+        self.algo.encrypt_block(self.temp, output);
     }
     fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) {
         add_pkcs_padding(input_buffer);
@@ -606,16 +587,14 @@ impl <T: BlockEncryptor> CbcPkcsPaddingEncryptor<T> {
         let block_size = algo.block_size();
         let processor = CbcPkcsPaddingEncryptorProcessor {
             algo: algo,
-            temp1: iv,
-            temp2: vec::from_elem(block_size, 0u8)
+            temp: vec::from_elem(block_size, 0u8)
         };
         CbcPkcsPaddingEncryptor {
-            block_engine: BlockEngine::new(processor, block_size)
+            block_engine: BlockEngine::new_with_history(processor, block_size, ~[], iv)
         }
     }
     pub fn reset(&mut self, iv: &[u8]) {
-        self.block_engine.reset();
-        self.block_engine.get_mut_processor().reset(iv);
+        self.block_engine.reset_with_history(&[], iv);
     }
 }
 

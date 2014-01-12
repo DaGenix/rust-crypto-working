@@ -13,34 +13,18 @@ use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecrypto
 
 use std::vec;
 
-
-
-
-
-
-        fn printvec(vec: &[u8]) {
-            print!("[");
-            for &x in vec.iter() {
-                print!("0x{:x}, ", x);
-            }
-            println!("]");
-        }
-
-
-
-
-
 trait BlockProcessor {
     /// Process a block of data
     fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]);
 
     /// Add padding to the last block of input data
+    #[allow(unused_variable)]
     fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
 
     /// Remove padding from the last block of output data
+    #[allow(unused_variable)]
     fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool { true }
 }
-
 
 enum BlockEngineState {
     FastMode,
@@ -323,278 +307,6 @@ impl <P: BlockProcessor> BlockEngine<P> {
     fn get_mut_processor<'a>(&'a mut self) -> &'a mut P { &mut self.processor }
 }
 
-
-
-/*
-
-enum BlockEngineState {
-    ScratchEmpty,
-    NeedInput,
-    NeedOutput,
-    LastInput,
-    Finished,
-    Error
-}
-
-struct BlockEngine<P> {
-    in_size: uint,
-    out_size: uint,
-    hist_size: uint,
-    in_scratch: OwnedWriteBuffer,
-    out_write_scratch: Option<OwnedWriteBuffer>,
-    out_read_scratch: Option<OwnedReadBuffer>,
-    hist_scratch: ~[u8],
-    processor: P,
-    state: BlockEngineState
-}
-
-impl <P: BlockProcessor> BlockEngine<P> {
-    fn new(processor: P, in_size: uint, out_size: uint) -> BlockEngine<P> {
-        BlockEngine {
-            in_size: in_size,
-            out_size: out_size,
-            hist_size: 0,
-            in_scratch: OwnedWriteBuffer::new(vec::from_elem(in_size, 0u8)),
-            out_write_scratch: Some(OwnedWriteBuffer::new(vec::from_elem(out_size, 0u8))),
-            out_read_scratch: None,
-            hist_scratch: ~[],
-            processor: processor,
-            state: ScratchEmpty
-        }
-    }
-    fn new_with_history(
-            processor: P,
-            in_size: uint,
-            out_size: uint,
-            initial_hist: ~[u8]) -> BlockEngine<P> {
-        BlockEngine {
-            hist_size: initial_hist.len(),
-            hist_scratch: initial_hist,
-            ..BlockEngine::new(processor, in_size, out_size)
-        }
-    }
-    fn fast_mode<R: ReadBuffer, W: WriteBuffer>(
-            &mut self,
-            input: &mut R,
-            output: &mut W,
-            eof: bool) -> BlockEngineState {
-        let has_next = || {
-            let enough_input = input.remaining() > self.in_size ||
-                (eof && input.remaining() >= self.in_size);
-            let enough_output = output.remaining() >= self.out_size;
-            (enough_input, enough_output)
-        };
-        let update_history = |last_in: &[u8]| {
-            vec::bytes::copy_memory(
-                self.hist_scratch,
-                last_in.slice_from(last_in.len() - self.hist_size));
-        };
-        let try_complete = |next_input_ok: bool, next_iter_ok: bool| {
-            if next_iter_ok {
-                input.rewind(self.hist_size);
-                None
-            } else {
-                let last_input_block = eof && !next_input_ok;
-                if  last_input_block {
-                    if self.processor.last_output(output) {
-                        // TODO - process the padding directly here so that we can avoid copying
-                        // into the history_buffer.
-                        Some(NeedInput)
-                    } else {
-                        Some(Error)
-                    }
-                } else {
-                    if input.is_empty() {
-                        Some(ScratchEmpty)
-                    } else {
-                        Some(NeedInput)
-                    }
-                }
-            }
-        };
-
-        match has_next() {
-            (true, true) => {
-                let next_input_ok: bool;
-                let next_iter_ok: bool;
-
-                {
-                    let next_in = input.take_next(self.in_size);
-                    let next_out = output.take_next(self.out_size);
-                    self.processor.process_block(self.hist_scratch.as_slice(), next_in, next_out);
-                    match has_next() {
-                        (a, b) => { next_input_ok = a; next_iter_ok = a && b; }
-                    }
-                    if !next_iter_ok {
-                        update_history(next_in);
-                    }
-                }
-
-                match try_complete(next_input_ok, next_iter_ok) {
-                    Some(r) => return r,
-                    None => { }
-                }
-            }
-            _ => {
-                if input.is_empty() {
-                    return ScratchEmpty;
-                } else {
-                    return NeedInput;
-                }
-            }
-        }
-
-        loop {
-            let next_input_ok: bool;
-            let next_iter_ok: bool;
-
-            {
-                let next_in = input.take_next(self.hist_size + self.in_size);
-                let next_out = output.take_next(self.out_size);
-                self.processor.process_block(
-                    next_in.slice_to(self.hist_size),
-                    next_in.slice_from(self.hist_size),
-                    next_out);
-                match has_next() {
-                    (a, b) => { next_input_ok = a; next_iter_ok = a && b; }
-                }
-                if !next_iter_ok {
-                    update_history(next_in);
-                }
-            }
-
-            match try_complete(next_input_ok, next_iter_ok) {
-                Some(r) => return r,
-                None => { }
-            }
-        }
-    }
-    fn process<R: ReadBuffer, W: WriteBuffer>(
-            &mut self,
-            input: &mut R,
-            output: &mut W,
-            eof: bool) -> Result<BufferResult, &'static str> {
-        loop {
-            match self.state {
-                ScratchEmpty => {
-                    self.state = self.fast_mode(input, output, eof);
-                    match self.state {
-                        ScratchEmpty => {
-                            if input.is_empty() {
-                                return Ok(BufferUnderflow);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                NeedInput => {
-                    input.push_to(&mut self.in_scratch);
-                    if self.in_scratch.is_full() && (eof || !input.is_empty()) {
-                        let mut rin = self.in_scratch.take_read_buffer();
-                        let mut wout = self.out_write_scratch.take_unwrap();
-
-                        {
-                            let next_in = rin.take_remaining();
-                            let next_out = wout.take_remaining();
-                            self.processor.process_block(
-                                self.hist_scratch.as_slice(),
-                                next_in,
-                                next_out);
-                            vec::bytes::copy_memory(
-                                self.hist_scratch,
-                                next_in.slice_from(self.in_size - self.hist_size));
-                        }
-
-                        if eof && input.remaining() < self.in_size {
-                            if self.processor.last_output(&mut wout) {
-                                self.state = NeedOutput;
-                            } else {
-                                self.state = Error;
-                            }
-                        } else {
-                            self.state = NeedOutput;
-                        }
-
-                        self.out_read_scratch = Some(wout.into_read_buffer());
-                    } else {
-                        if eof {
-                            self.state = LastInput;
-                        } else {
-                            return Ok(BufferUnderflow);
-                        }
-                    }
-                }
-                NeedOutput => {
-                    let mut rout = self.out_read_scratch.take_unwrap();
-                    rout.push_to(output);
-                    if rout.is_empty() {
-                        self.out_write_scratch = Some(rout.into_write_buffer());
-                        self.state = ScratchEmpty;
-                    } else {
-                        self.out_read_scratch = Some(rout);
-                        return Ok(BufferOverflow);
-                    }
-                }
-                LastInput => {
-                    if self.processor.last_input(&mut self.in_scratch) {
-                        if self.in_scratch.is_full() {
-                            let mut rin = self.in_scratch.take_read_buffer();
-                            let mut wout = self.out_write_scratch.take_unwrap();
-                            {
-                                let next_in = rin.take_remaining();
-                                let next_out = wout.take_remaining();
-                                self.processor.process_block(
-                                    self.hist_scratch.as_slice(),
-                                    next_in,
-                                    next_out);
-                            }
-                            self.out_read_scratch = Some(wout.into_read_buffer());
-                        }
-                        self.state = Finished;
-                    } else {
-                        self.state = Error;
-                    }
-                }
-                Finished => {
-                    match self.out_read_scratch {
-                        Some(ref mut rout) => {
-                            rout.push_to(output);
-                            if rout.is_empty() {
-                                return Ok(BufferUnderflow);
-                            } else {
-                                return Ok(BufferOverflow);
-                            }
-                        }
-                        None => { return Ok(BufferUnderflow); }
-                    }
-                }
-                Error => {
-                    // TODO - Better error messages / codes
-                    return Err("Failed somewhere.");
-                }
-            }
-        }
-    }
-    fn reset(&mut self) {
-        self.state = ScratchEmpty;
-        self.in_scratch.reset();
-        if self.out_read_scratch.is_some() {
-            let ors = self.out_read_scratch.take_unwrap();
-            let ows = ors.into_write_buffer();
-            self.out_write_scratch = Some(ows);
-        } else {
-            self.out_write_scratch.as_mut().mutate( |ows| { ows.reset(); ows } );
-        }
-    }
-    fn reset_with_history(&mut self, history: &[u8]) {
-        self.reset();
-        vec::bytes::copy_memory(self.hist_scratch, history);
-    }
-    fn get_mut_processor<'a>(&'a mut self) -> &'a mut P { &mut self.processor }
-}
-*/
-
-
 fn add_pkcs_padding<W: WriteBuffer>(input_buffer: &mut W) {
     let rem = input_buffer.remaining();
     assert!(rem != 0 && rem <= 255);
@@ -614,8 +326,7 @@ fn strip_pkcs_padding<R: ReadBuffer>(output_buffer: &mut R) -> bool {
             }
         }
     }
-//    output_buffer.rewind(last_byte as uint);
-    output.truncate(...);
+    output_buffer.truncate(last_byte as uint);
     true
 }
 
@@ -624,7 +335,7 @@ struct EcbNoPaddingEncryptorProcessor<T> {
 }
 
 impl <T: BlockEncryptor> BlockProcessor for EcbNoPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.encrypt_block(input, output);
     }
 }
@@ -660,7 +371,7 @@ struct EcbNoPaddingDecryptorProcessor<T> {
 }
 
 impl <T: BlockDecryptor> BlockProcessor for EcbNoPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, output);
     }
 }
@@ -696,7 +407,7 @@ struct EcbPkcsPaddingEncryptorProcessor<T> {
 }
 
 impl <T: BlockEncryptor> BlockProcessor for EcbPkcsPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.encrypt_block(input, output);
     }
     fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) {
@@ -735,7 +446,7 @@ struct EcbPkcsPaddingDecryptorProcessor<T> {
 }
 
 impl <T: BlockDecryptor> BlockProcessor for EcbPkcsPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, output);
     }
     fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool {
@@ -782,7 +493,7 @@ impl <T> CbcNoPaddingEncryptorProcessor<T> {
 }
 
 impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
             *o = *x ^ *y;
         }
@@ -826,9 +537,9 @@ struct CbcNoPaddingDecryptorProcessor<T> {
 }
 
 impl <T: BlockDecryptor> BlockProcessor for CbcNoPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, self.temp);
-        for ((x, y), o) in self.temp.iter().zip(in_history.iter()).zip(output.mut_iter()) {
+        for ((x, y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
             *o = *x ^ *y;
         }
     }
@@ -874,7 +585,7 @@ impl <T> CbcPkcsPaddingEncryptorProcessor<T> {
 }
 
 impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, in_history: &[u8], out_history: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         for ((x, y), o) in self.temp1.iter().zip(input.iter()).zip(self.temp2.mut_iter()) {
             *o = *x ^ *y;
         }
@@ -921,7 +632,7 @@ struct CbcPkcsPaddingDecryptorProcessor<T> {
 }
 
 impl <T: BlockDecryptor> BlockProcessor for CbcPkcsPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]) {
+    fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, self.temp);
         for ((x, y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
             *o = *x ^ *y;
@@ -993,7 +704,7 @@ pub struct CtrMode<A> {
 }
 
 impl <A: BlockEncryptor> CtrMode<A> {
-    fn new(algo: A, ctr: ~[u8]) -> CtrMode<A> {
+    pub fn new(algo: A, ctr: ~[u8]) -> CtrMode<A> {
         let block_size = algo.block_size();
         CtrMode {
             algo: algo,
@@ -1001,7 +712,7 @@ impl <A: BlockEncryptor> CtrMode<A> {
             bytes: OwnedReadBuffer::new_with_len(vec::from_elem(block_size, 0u8), 0)
         }
     }
-    fn reset(&mut self, ctr: &[u8]) {
+    pub fn reset(&mut self, ctr: &[u8]) {
         vec::bytes::copy_memory(self.ctr, ctr);
         self.bytes.reset();
     }
@@ -1054,7 +765,7 @@ fn construct_ctr_x8(in_ctr: &[u8], out_ctr_x8: &mut [u8]) {
 }
 
 impl <A: BlockEncryptorX8> CtrModeX8<A> {
-    fn new(algo: A, ctr: &[u8]) -> CtrModeX8<A> {
+    pub fn new(algo: A, ctr: &[u8]) -> CtrModeX8<A> {
         let block_size = algo.block_size();
         let mut ctr_x8 = vec::from_elem(block_size * 8, 0u8);
         construct_ctr_x8(ctr, ctr_x8);
@@ -1064,7 +775,7 @@ impl <A: BlockEncryptorX8> CtrModeX8<A> {
             bytes: OwnedReadBuffer::new_with_len(vec::from_elem(block_size * 8, 0u8), 0)
         }
     }
-    fn reset(&mut self, ctr: &[u8]) {
+    pub fn reset(&mut self, ctr: &[u8]) {
         construct_ctr_x8(ctr, self.ctr_x8);
         self.bytes.reset();
     }
@@ -1337,16 +1048,6 @@ mod test {
                 _ => {}
             }
         }
-        fn printvec(vec: &[u8]) {
-            print!("[");
-            for &x in vec.iter() {
-                print!("0x{:x}, ", x);
-            }
-            println!("]");
-        }
-
-        println!("Expected: "); printvec(test.get_cipher());
-        println!("Actual  : "); printvec(cipher_out);
         assert!(test.get_cipher() == cipher_out);
 
         let mut plain_out = vec::from_elem(test.get_plain().len(), 0u8);

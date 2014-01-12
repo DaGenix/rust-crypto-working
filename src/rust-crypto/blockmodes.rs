@@ -5,7 +5,6 @@
 // except according to those terms.
 
 // TODO - Optimize the XORs
-// TODO - Try to speed up CBC modes by reducing buffer copies (history for output?)
 
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
@@ -18,10 +17,12 @@ trait BlockProcessor {
     fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]);
 
     /// Add padding to the last block of input data
+    /// If the input_buffer is not full or empty after this function returns, the processing fails
     #[allow(unused_variable)]
     fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
 
     /// Remove padding from the last block of output data
+    /// If false is returned, the processing fails
     #[allow(unused_variable)]
     fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool { true }
 }
@@ -53,16 +54,18 @@ struct BlockEngine<P> {
 }
 
 fn update_history(in_hist: &mut [u8], out_hist: &mut [u8], last_in: &[u8], last_out: &[u8]) {
-    // TODO - Should I add a check to see if history is necesary here before calling
-    // copy_memory?
     let in_hist_len = in_hist.len();
+    if in_hist_len > 0 {
+        vec::bytes::copy_memory(
+            in_hist,
+            last_in.slice_from(last_in.len() - in_hist_len));
+    }
     let out_hist_len = out_hist.len();
-    vec::bytes::copy_memory(
-        in_hist,
-        last_in.slice_from(last_in.len() - in_hist_len));
-    vec::bytes::copy_memory(
-        out_hist,
-        last_out.slice_from(last_out.len() - out_hist_len));
+    if out_hist_len > 0 {
+        vec::bytes::copy_memory(
+            out_hist,
+            last_out.slice_from(last_out.len() - out_hist_len));
+    }
 }
 
 impl <P: BlockProcessor> BlockEngine<P> {
@@ -94,13 +97,13 @@ impl <P: BlockProcessor> BlockEngine<P> {
             input: &mut R,
             output: &mut W) -> BlockEngineState {
         let has_next = || {
-            // Not the greater than - very important since this method must not ever process the
+            // Not the greater than - very important since this method must never process the last
             // block.
             let enough_input = input.remaining() > self.block_size;
             let enough_output = output.remaining() >= self.block_size;
             enough_input && enough_output
         };
-        fn split<'a>(vec: &'a [u8], at: uint) -> (&'a [u8], &'a [u8]) {
+        fn split_at<'a>(vec: &'a [u8], at: uint) -> (&'a [u8], &'a [u8]) {
             (vec.slice_to(at), vec.slice_from(at))
         }
 
@@ -128,9 +131,10 @@ impl <P: BlockProcessor> BlockEngine<P> {
         let next_out_size = self.out_hist.len() + self.block_size;
         while has_next() {
             input.rewind(self.in_hist.len());
-            let (in_hist, next_in) = split(input.take_next(next_in_size), self.in_hist.len());
+            let (in_hist, next_in) = split_at(input.take_next(next_in_size), self.in_hist.len());
             output.rewind(self.out_hist.len());
-            let (out_hist, next_out) = output.take_next(next_out_size).mut_split_at(self.out_hist.len());
+            let (out_hist, next_out) = output.take_next(next_out_size).mut_split_at(
+                self.out_hist.len());
             self.processor.process_block(
                 in_hist,
                 out_hist,
@@ -296,7 +300,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
             let ows = ors.into_write_buffer();
             self.out_write_scratch = Some(ows);
         } else {
-            self.out_write_scratch.as_mut().mutate( |ows| { ows.reset(); ows } );
+            self.out_write_scratch.get_mut_ref().reset();
         }
     }
     fn reset_with_history(&mut self, in_hist: &[u8], out_hist: &[u8]) {
@@ -319,8 +323,8 @@ fn strip_pkcs_padding<R: ReadBuffer>(output_buffer: &mut R) -> bool {
     {
         let data = output_buffer.peek_remaining();
         last_byte = *data.last();
-        for x in data.iter().invert().take(last_byte as uint) {
-            if *x != last_byte {
+        for &x in data.iter().invert().take(last_byte as uint) {
+            if x != last_byte {
                 return false;
             }
         }
@@ -528,8 +532,8 @@ struct CbcNoPaddingDecryptorProcessor<T> {
 impl <T: BlockDecryptor> BlockProcessor for CbcNoPaddingDecryptorProcessor<T> {
     fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, self.temp);
-        for ((x, y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
-            *o = *x ^ *y;
+        for ((&x, &y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
+            *o = x ^ y;
         }
     }
 }
@@ -613,8 +617,8 @@ struct CbcPkcsPaddingDecryptorProcessor<T> {
 impl <T: BlockDecryptor> BlockProcessor for CbcPkcsPaddingDecryptorProcessor<T> {
     fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, self.temp);
-        for ((x, y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
-            *o = *x ^ *y;
+        for ((&x, &y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
+            *o = x ^ y;
         }
     }
     fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool {
@@ -716,8 +720,8 @@ impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
             let bytes_it = self.bytes.take_next(count).iter();
             let in_it = input.take_next(count).iter();
             let out_it = output.take_next(count).mut_iter();
-            for ((x, y), o) in bytes_it.zip(in_it).zip(out_it) {
-                *o = *x ^ *y;
+            for ((&x, &y), o) in bytes_it.zip(in_it).zip(out_it) {
+                *o = x ^ y;
             }
         }
     }
@@ -782,8 +786,8 @@ impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
             let bytes_it = self.bytes.take_next(count).iter();
             let in_it = input.take_next(count).iter();
             let out_it = output.take_next(count).mut_iter();
-            for ((x, y), o) in bytes_it.zip(in_it).zip(out_it) {
-                *o = *x ^ *y;
+            for ((&x, &y), o) in bytes_it.zip(in_it).zip(out_it) {
+                *o = x ^ y;
             }
         }
     }
@@ -1112,9 +1116,9 @@ mod test {
             let mut buff_out = RefWriteBuffer::new(cipher);
 
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Encryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         });
 
@@ -1138,9 +1142,9 @@ mod test {
             let mut buff_out = RefWriteBuffer::new(cipher);
 
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Encryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         });
 

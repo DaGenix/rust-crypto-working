@@ -26,16 +26,19 @@ pub trait BlockDecryptorX8 {
     fn decrypt_block_x8(&self, input: &[u8], output: &mut [u8]);
 }
 
+pub enum SymmetricCipherError {
+    InvalidLength,
+    InvalidPadding
+}
+
 pub trait Encryptor {
-    // TODO - Better error handling
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-        -> Result<BufferResult, &'static str>;
+        -> Result<BufferResult, SymmetricCipherError>;
 }
 
 pub trait Decryptor {
-    // TODO - Better error handling
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-        -> Result<BufferResult, &'static str>;
+        -> Result<BufferResult, SymmetricCipherError>;
 }
 
 pub trait SynchronousStreamCipher {

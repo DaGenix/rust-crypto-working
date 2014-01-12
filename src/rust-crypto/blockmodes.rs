@@ -8,7 +8,8 @@
 
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
-use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor};
+use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor,
+    SymmetricCipherError, InvalidPadding, InvalidLength};
 
 use std::vec;
 
@@ -34,7 +35,7 @@ enum BlockEngineState {
     LastInput,
     LastInput2,
     Finished,
-    Error
+    Error(SymmetricCipherError)
 }
 
 struct BlockEngine<P> {
@@ -160,7 +161,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
             &mut self,
             input: &mut R,
             output: &mut W,
-            eof: bool) -> Result<BufferResult, &'static str> {
+            eof: bool) -> Result<BufferResult, SymmetricCipherError> {
         let process_scratch = || {
             let mut rin = self.in_scratch.take_read_buffer();
             let mut wout = self.out_write_scratch.take_unwrap();
@@ -237,13 +238,15 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         self.processor.pad_input(&mut self.in_scratch);
                         if self.in_scratch.is_full() {
                             process_scratch();
-                            self.processor.strip_output(self.out_read_scratch.get_mut_ref());
-                            self.state = Finished;
+                            if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                                self.state = Finished;
+                            } else {
+                                self.state = Error(InvalidPadding);
+                            }
                         } else if self.in_scratch.is_empty() {
                             self.state = Finished;
                         } else {
-                            self.state = Error;
-                            return Err("Something went wrong");
+                            self.state = Error(InvalidLength);
                         }
                     } else {
                         process_scratch();
@@ -251,11 +254,13 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         if self.in_scratch.is_full() {
                             self.state = LastInput2;
                         } else if self.in_scratch.is_empty() {
-                            self.processor.strip_output(self.out_read_scratch.get_mut_ref());
-                            self.state = Finished;
+                            if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                                self.state = Finished;
+                            } else {
+                                self.state = Error(InvalidPadding);
+                            }
                         } else {
-                            self.state = Error;
-                            return Err("Something went wrong");
+                            self.state = Error(InvalidLength);
                         }
                     }
                 }
@@ -265,8 +270,11 @@ impl <P: BlockProcessor> BlockEngine<P> {
                     if rout.is_empty() {
                         self.out_write_scratch = Some(rout.into_write_buffer());
                         process_scratch();
-                        self.processor.strip_output(self.out_read_scratch.get_mut_ref());
-                        self.state = Finished;
+                        if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                            self.state = Finished;
+                        } else {
+                            self.state = Error(InvalidPadding);
+                        }
                     } else {
                         self.out_read_scratch = Some(rout);
                         return Ok(BufferOverflow);
@@ -285,9 +293,8 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         None => { return Ok(BufferUnderflow); }
                     }
                 }
-                Error => {
-                    // TODO - Better error messages / codes
-                    return Err("Failed somewhere.");
+                Error(err) => {
+                    return Err(err);
                 }
             }
         }
@@ -364,7 +371,7 @@ impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> Encryptor for EcbNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -400,7 +407,7 @@ impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
 
 impl <T: BlockDecryptor> Decryptor for EcbNoPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -439,7 +446,7 @@ impl <T: BlockEncryptor> EcbPkcsPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> Encryptor for EcbPkcsPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -478,7 +485,7 @@ impl <T: BlockDecryptor> EcbPkcsPaddingDecryptor<T> {
 
 impl <T: BlockDecryptor> Decryptor for EcbPkcsPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -519,7 +526,7 @@ impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> Encryptor for CbcNoPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -560,7 +567,7 @@ impl <T: BlockDecryptor> CbcNoPaddingDecryptor<T> {
 
 impl <T: BlockDecryptor> Decryptor for CbcNoPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -604,7 +611,7 @@ impl <T: BlockEncryptor> CbcPkcsPaddingEncryptor<T> {
 
 impl <T: BlockEncryptor> Encryptor for CbcPkcsPaddingEncryptor<T> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -648,7 +655,7 @@ impl <T: BlockDecryptor> CbcPkcsPaddingDecryptor<T> {
 
 impl <T: BlockDecryptor> Decryptor for CbcPkcsPaddingDecryptor<T> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
@@ -703,7 +710,7 @@ impl <A: BlockEncryptor> CtrMode<A> {
 
 impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         loop {
             if input.is_empty() {
                 return Ok(BufferUnderflow);
@@ -729,7 +736,7 @@ impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
 
 impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.encrypt(input, output, eof)
     }
 }
@@ -766,7 +773,7 @@ impl <A: BlockEncryptorX8> CtrModeX8<A> {
 
 impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         loop {
             if input.is_empty() {
                 return Ok(BufferUnderflow);
@@ -795,7 +802,7 @@ impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
 
 impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, &'static str> {
+            -> Result<BufferResult, SymmetricCipherError> {
         self.encrypt(input, output, eof)
     }
 }
@@ -1026,9 +1033,9 @@ mod test {
             let mut buff_in = RefReadBuffer::new(test.get_plain());
             let mut buff_out = RefWriteBuffer::new(cipher_out);
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Encryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         }
         assert!(test.get_cipher() == cipher_out);
@@ -1038,9 +1045,9 @@ mod test {
             let mut buff_in = RefReadBuffer::new(test.get_cipher());
             let mut buff_out = RefWriteBuffer::new(plain_out);
             match dec.decrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Decryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         }
         assert!(test.get_plain() == plain_out);
@@ -1168,9 +1175,9 @@ mod test {
             let mut buff_out = RefWriteBuffer::new(cipher);
 
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Encryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         });
 
@@ -1194,9 +1201,9 @@ mod test {
             let mut buff_out = RefWriteBuffer::new(cipher);
 
             match enc.encrypt(&mut buff_in, &mut buff_out, true) {
+                Ok(BufferUnderflow) => {}
                 Ok(BufferOverflow) => fail!("Encryption not completed"),
                 Err(_) => fail!("Error"),
-                _ => {}
             }
         });
 

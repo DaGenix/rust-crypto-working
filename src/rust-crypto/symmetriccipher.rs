@@ -42,6 +42,5 @@ pub trait Decryptor {
 }
 
 pub trait SynchronousStreamCipher {
-    fn generate(&mut self, result: &mut [u8]);
     fn process(&mut self, input: &[u8], output: &mut [u8]);
 }

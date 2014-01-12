@@ -6,10 +6,11 @@
 
 // TODO - Optimize the XORs
 
+use std;
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
 use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor,
-    SymmetricCipherError, InvalidPadding, InvalidLength};
+    SynchronousStreamCipher, SymmetricCipherError, InvalidPadding, InvalidLength};
 
 use std::vec;
 
@@ -660,22 +661,6 @@ impl <T: BlockDecryptor> Decryptor for CbcPkcsPaddingDecryptor<T> {
     }
 }
 
-fn min3(a: uint, b: uint, c: uint) -> uint {
-    if a < b {
-        if a < c {
-            a
-        } else {
-            c
-        }
-    } else {
-        if b < c {
-            b
-        } else {
-            c
-        }
-    }
-}
-
 fn add_ctr(ctr: &mut [u8], mut ammount: u8) {
     for i in ctr.mut_iter().invert() {
         let prev = *i;
@@ -706,38 +691,55 @@ impl <A: BlockEncryptor> CtrMode<A> {
         vec::bytes::copy_memory(self.ctr, ctr);
         self.bytes.reset();
     }
-}
-
-impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        loop {
-            if input.is_empty() {
-                return Ok(BufferUnderflow);
-            }
-            if output.is_full() {
-                return Ok(BufferOverflow)
-            }
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        assert!(input.len() == output.len());
+        let len = input.len();
+        let mut i = 0u;
+        while i < len {
             if self.bytes.is_empty() {
                 let mut wb = self.bytes.borrow_write_buffer();
                 self.algo.encrypt_block(self.ctr, wb.take_remaining());
                 add_ctr(self.ctr, 1);
             }
-            let count = min3(self.bytes.remaining(), input.remaining(), output.remaining());
+            let count = std::cmp::min(self.bytes.remaining(), len - i);
             let bytes_it = self.bytes.take_next(count).iter();
-            let in_it = input.take_next(count).iter();
-            let out_it = output.take_next(count).mut_iter();
+            let in_it = input.slice_from(i).iter();
+            let out_it = output.mut_slice_from(i).mut_iter();
             for ((&x, &y), o) in bytes_it.zip(in_it).zip(out_it) {
                 *o = x ^ y;
             }
+            i += count;
+        }
+    }
+    fn process_buffers<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W)
+            -> Result<BufferResult, SymmetricCipherError> {
+        let count = std::cmp::min(input.remaining(), output.remaining());
+        self.process(input.take_next(count), output.take_next(count));
+        if input.is_empty() {
+            return Ok(BufferUnderflow);
+        } else {
+            return Ok(BufferOverflow);
         }
     }
 }
 
-impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+impl <A: BlockEncryptor> SynchronousStreamCipher for CtrMode<A> {
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        self.process(input, output);
+    }
+}
+
+impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.encrypt(input, output, eof)
+        self.process_buffers(input, output)
+    }
+}
+
+impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        self.process_buffers(input, output)
     }
 }
 
@@ -769,19 +771,12 @@ impl <A: BlockEncryptorX8> CtrModeX8<A> {
         construct_ctr_x8(ctr, self.ctr_x8);
         self.bytes.reset();
     }
-}
-
-impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        loop {
-            if input.is_empty() {
-                return Ok(BufferUnderflow);
-            }
-            if output.is_full() {
-                return Ok(BufferOverflow)
-            }
-            // TODO - Can some of this be combined with regular CtrMode?
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        // TODO - Can some of this be combined with regular CtrMode?
+        assert!(input.len() == output.len());
+        let len = input.len();
+        let mut i = 0u;
+        while i < len {
             if self.bytes.is_empty() {
                 let mut wb = self.bytes.borrow_write_buffer();
                 self.algo.encrypt_block_x8(self.ctr_x8, wb.take_remaining());
@@ -789,21 +784,46 @@ impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
                     add_ctr(ctr_i, 8);
                 }
             }
-            let count = min3(self.bytes.remaining(), input.remaining(), output.remaining());
+            let count = std::cmp::min(self.bytes.remaining(), len - i);
             let bytes_it = self.bytes.take_next(count).iter();
-            let in_it = input.take_next(count).iter();
-            let out_it = output.take_next(count).mut_iter();
+            let in_it = input.slice_from(i).iter();
+            let out_it = output.mut_slice_from(i).mut_iter();
             for ((&x, &y), o) in bytes_it.zip(in_it).zip(out_it) {
                 *o = x ^ y;
             }
+            i += count;
+        }
+    }
+    fn process_buffers<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W)
+            -> Result<BufferResult, SymmetricCipherError> {
+        // TODO - Can some of this be combined with regular CtrMode?
+        let count = std::cmp::min(input.remaining(), output.remaining());
+        self.process(input.take_next(count), output.take_next(count));
+        if input.is_empty() {
+            return Ok(BufferUnderflow);
+        } else {
+            return Ok(BufferOverflow);
         }
     }
 }
 
-impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+impl <A: BlockEncryptorX8> SynchronousStreamCipher for CtrModeX8<A> {
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        self.process(input, output);
+    }
+}
+
+impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.encrypt(input, output, eof)
+        self.process_buffers(input, output)
+    }
+}
+
+impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        self.process_buffers(input, output)
     }
 }
 

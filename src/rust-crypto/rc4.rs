@@ -9,7 +9,9 @@
  * NOT A FIXED TIME IMPLEMENTATION.
  */
 
-use symmetriccipher::SynchronousStreamCipher;
+use std;
+use buffer::{ReadBuffer, WriteBuffer, BufferResult, BufferUnderflow, BufferOverflow};
+use symmetriccipher::{Encryptor, Decryptor, SynchronousStreamCipher, SymmetricCipherError};
 
 pub struct Rc4 {
     priv i: uint,
@@ -41,11 +43,6 @@ impl Rc4 {
 }
 
 impl SynchronousStreamCipher for Rc4 {
-    fn generate(&mut self, result: &mut [u8]) {
-        for y in result.mut_iter() {
-            *y ^= self.next();
-        }
-    }
     fn process(&mut self, input: &[u8], output: &mut [u8]) {
         assert!(input.len() == output.len());
         for (x, y) in input.iter().zip(output.mut_iter()) {
@@ -54,6 +51,31 @@ impl SynchronousStreamCipher for Rc4 {
     }
 }
 
+impl Encryptor for Rc4 {
+    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        let count = std::cmp::min(input.remaining(), output.remaining());
+        self.process(input.take_next(count), output.take_next(count));
+        if input.is_empty() {
+            return Ok(BufferUnderflow);
+        } else {
+            return Ok(BufferOverflow);
+        }
+    }
+}
+
+impl Decryptor for Rc4 {
+    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        let count = std::cmp::min(input.remaining(), output.remaining());
+        self.process(input.take_next(count), output.take_next(count));
+        if input.is_empty() {
+            return Ok(BufferUnderflow);
+        } else {
+            return Ok(BufferOverflow);
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -95,13 +117,6 @@ mod test {
             let mut rc4 = Rc4::new(t.key.as_bytes());
             let mut result = vec::from_elem(t.output.len(), 0u8);
             rc4.process(t.input.as_bytes(), result);
-            assert!(result == t.output);
-        }
-        for t in tests.iter() {
-            let mut rc4 = Rc4::new(t.key.as_bytes());
-            let mut result = vec::from_elem(t.output.len(), 0u8);
-            vec::bytes::copy_memory(result, t.input.as_bytes());
-            rc4.generate(result);
             assert!(result == t.output);
         }
     }

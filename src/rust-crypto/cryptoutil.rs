@@ -8,9 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std;
 use std::num::{One, Zero, CheckedAdd};
 use std::vec::bytes::{MutableByteVector, copy_memory};
 
+use buffer::{ReadBuffer, WriteBuffer, BufferResult, BufferUnderflow, BufferOverflow};
+use symmetriccipher::{SynchronousStreamCipher, SymmetricCipherError};
 
 /// Write a u64 into a vector, which must be 8 bytes long. The value is written in big-endian
 /// format.
@@ -203,6 +206,23 @@ pub fn fixed_time_eq(lhs: &[u8], rhs: &[u8]) -> bool {
         let lhsp = lhs.unsafe_ref(0);
         let rhsp = rhs.unsafe_ref(0);
         return fixed_time_eq_asm(lhsp, rhsp, count);
+    }
+}
+
+
+/// symm_enc_or_dec() implements the necessary functionality to turn a SynchronousStreamCipher into
+/// an Encryptor or Decryptor
+pub fn symm_enc_or_dec<S: SynchronousStreamCipher, R: ReadBuffer, W: WriteBuffer>(
+        c: &mut S,
+        input: &mut R,
+        output: &mut W) ->
+        Result<BufferResult, SymmetricCipherError> {
+    let count = std::cmp::min(input.remaining(), output.remaining());
+    c.process(input.take_next(count), output.take_next(count));
+    if input.is_empty() {
+        return Ok(BufferUnderflow);
+    } else {
+        return Ok(BufferOverflow);
     }
 }
 

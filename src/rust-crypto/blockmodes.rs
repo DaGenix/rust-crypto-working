@@ -9,6 +9,7 @@
 use std;
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
     BufferUnderflow, BufferOverflow};
+use cryptoutil::symm_enc_or_dec;
 use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor,
     SynchronousStreamCipher, SymmetricCipherError, InvalidPadding, InvalidLength};
 
@@ -711,16 +712,6 @@ impl <A: BlockEncryptor> CtrMode<A> {
             i += count;
         }
     }
-    fn process_buffers<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W)
-            -> Result<BufferResult, SymmetricCipherError> {
-        let count = std::cmp::min(input.remaining(), output.remaining());
-        self.process(input.take_next(count), output.take_next(count));
-        if input.is_empty() {
-            return Ok(BufferUnderflow);
-        } else {
-            return Ok(BufferOverflow);
-        }
-    }
 }
 
 impl <A: BlockEncryptor> SynchronousStreamCipher for CtrMode<A> {
@@ -732,14 +723,14 @@ impl <A: BlockEncryptor> SynchronousStreamCipher for CtrMode<A> {
 impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.process_buffers(input, output)
+        symm_enc_or_dec(self, input, output)
     }
 }
 
 impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.process_buffers(input, output)
+        symm_enc_or_dec(self, input, output)
     }
 }
 
@@ -794,17 +785,6 @@ impl <A: BlockEncryptorX8> CtrModeX8<A> {
             i += count;
         }
     }
-    fn process_buffers<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W)
-            -> Result<BufferResult, SymmetricCipherError> {
-        // TODO - Can some of this be combined with regular CtrMode?
-        let count = std::cmp::min(input.remaining(), output.remaining());
-        self.process(input.take_next(count), output.take_next(count));
-        if input.is_empty() {
-            return Ok(BufferUnderflow);
-        } else {
-            return Ok(BufferOverflow);
-        }
-    }
 }
 
 impl <A: BlockEncryptorX8> SynchronousStreamCipher for CtrModeX8<A> {
@@ -816,14 +796,14 @@ impl <A: BlockEncryptorX8> SynchronousStreamCipher for CtrModeX8<A> {
 impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.process_buffers(input, output)
+        symm_enc_or_dec(self, input, output)
     }
 }
 
 impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        self.process_buffers(input, output)
+        symm_enc_or_dec(self, input, output)
     }
 }
 

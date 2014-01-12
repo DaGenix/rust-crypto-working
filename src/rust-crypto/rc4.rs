@@ -9,9 +9,9 @@
  * NOT A FIXED TIME IMPLEMENTATION.
  */
 
-use std;
-use buffer::{ReadBuffer, WriteBuffer, BufferResult, BufferUnderflow, BufferOverflow};
+use buffer::{ReadBuffer, WriteBuffer, BufferResult};
 use symmetriccipher::{Encryptor, Decryptor, SynchronousStreamCipher, SymmetricCipherError};
+use cryptoutil::symm_enc_or_dec;
 
 pub struct Rc4 {
     priv i: uint,
@@ -54,26 +54,14 @@ impl SynchronousStreamCipher for Rc4 {
 impl Encryptor for Rc4 {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        let count = std::cmp::min(input.remaining(), output.remaining());
-        self.process(input.take_next(count), output.take_next(count));
-        if input.is_empty() {
-            return Ok(BufferUnderflow);
-        } else {
-            return Ok(BufferOverflow);
-        }
+        symm_enc_or_dec(self, input, output)
     }
 }
 
 impl Decryptor for Rc4 {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
-        let count = std::cmp::min(input.remaining(), output.remaining());
-        self.process(input.take_next(count), output.take_next(count));
-        if input.is_empty() {
-            return Ok(BufferUnderflow);
-        } else {
-            return Ok(BufferOverflow);
-        }
+        symm_enc_or_dec(self, input, output)
     }
 }
 

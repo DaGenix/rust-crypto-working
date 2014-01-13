@@ -12,7 +12,7 @@ use std;
 use std::vec;
 
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
-    BufferUnderflow, BufferOverflow};
+    BufferUnderflow, BufferOverflow, RefReadBuffer, RefWriteBuffer};
 use cryptoutil::symm_enc_or_dec;
 use symmetriccipher::{BlockEncryptor, BlockEncryptorX8, Encryptor, BlockDecryptor, Decryptor,
     SynchronousStreamCipher, SymmetricCipherError, InvalidPadding, InvalidLength};
@@ -27,7 +27,7 @@ trait BlockProcessor {
 }
 
 /// A PaddingProcessor handles adding or removing padding
-trait PaddingProcessor {
+pub trait PaddingProcessor {
     /// Add padding to the last block of input data
     /// If the mode can't handle a non-full block, it signals that error by simply leaving the block
     /// as it is which will be detected as an InvalidLength error.
@@ -445,8 +445,8 @@ impl PaddingProcessor for PkcsPadding {
 }
 
 /// Wraps a PaddingProcessor so that only pad_input() will actually be called.
-struct EncPadding<X> {
-    padding: X
+pub struct EncPadding<X> {
+    priv padding: X
 }
 
 impl <X: PaddingProcessor> EncPadding<X> {
@@ -459,8 +459,8 @@ impl <X: PaddingProcessor> PaddingProcessor for EncPadding<X> {
 }
 
 /// Wraps a PaddingProcessor so that only strip_output() will actually be called.
-struct DecPadding<X> {
-    padding: X
+pub struct DecPadding<X> {
+    priv padding: X
 }
 
 impl <X: PaddingProcessor> DecPadding<X> {
@@ -504,7 +504,7 @@ impl <T: BlockEncryptor, X: PaddingProcessor> EcbEncryptor<T, X> {
 }
 
 impl <T: BlockEncryptor, X: PaddingProcessor> Encryptor for EcbEncryptor<T, X> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
@@ -542,7 +542,7 @@ impl <T: BlockDecryptor, X: PaddingProcessor> EcbDecryptor<T, X> {
 }
 
 impl <T: BlockDecryptor, X: PaddingProcessor> Decryptor for EcbDecryptor<T, X> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
@@ -590,7 +590,7 @@ impl <T: BlockEncryptor, X: PaddingProcessor> CbcEncryptor<T, X> {
 }
 
 impl <T: BlockEncryptor, X: PaddingProcessor> Encryptor for CbcEncryptor<T, X> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
@@ -638,7 +638,7 @@ impl <T: BlockDecryptor, X: PaddingProcessor> CbcDecryptor<T, X> {
 }
 
 impl <T: BlockDecryptor, X: PaddingProcessor> Decryptor for CbcDecryptor<T, X> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
@@ -705,14 +705,14 @@ impl <A: BlockEncryptor> SynchronousStreamCipher for CtrMode<A> {
 }
 
 impl <A: BlockEncryptor> Encryptor for CtrMode<A> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }
 }
 
 impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }
@@ -780,14 +780,14 @@ impl <A: BlockEncryptorX8> SynchronousStreamCipher for CtrModeX8<A> {
 }
 
 impl <A: BlockEncryptorX8> Encryptor for CtrModeX8<A> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }
 }
 
 impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }

@@ -4,312 +4,384 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/*
-
 #[cfg(target_arch = "x86")]
 #[cfg(target_arch = "x86_64")]
-use aesni::*;
+use aesni;
 
-use aessafe::*;
-use symmetriccipher::*;
-use util::*;
-
-
-macro_rules! define_struct(
-    (
-        $Aes:ident,
-        $AesEngine:ident
-    ) => (
-        struct $Aes {
-            engine: $AesEngine
-        }
-    )
-)
-
-macro_rules! define_impl(
-    (
-        $Aes:ident,
-        $AesNiEngine:ident => $AesNi: ident,
-        $AesSafeEngine:ident => $AesSafe:ident
-    ) => (
-        impl $Aes {
-            #[cfg(target_arch = "x86")]
-            #[cfg(target_arch = "x86_64")]
-            pub fn new(key: &[u8]) -> $Aes {
-                if supports_aesni() {
-                    $Aes {
-                        engine: $AesNiEngine($AesNi::new(key))
-                    }
-                } else {
-                    $Aes {
-                        engine: $AesSafeEngine($AesSafe::new(key))
-                    }
-                }
-            }
-
-            #[cfg(not(target_arch = "x86"), not(target_arch = "x86_64"))]
-            pub fn new(key: &[u8]) -> $Aes {
-                $Aes {
-                    engine: $AesSafeEngine($AesSafe::new(key))
-                }
-            }
-        }
-    )
-)
-
-macro_rules! define_block(
-    (
-        $name:ident
-    ) => (
-        impl BlockSize16 for $name { }
-    )
-)
-
-macro_rules! define_enc(
-    (
-        $AesEncryptor:ident,
-        $AesNiEncryptionEngine:ident,
-        $AesSafeEncryptionEngine:ident
-    ) => (
-        impl BlockEncryptor for $AesEncryptor {
-            #[cfg(target_arch = "x86")]
-            #[cfg(target_arch = "x86_64")]
-            fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
-                match self.engine {
-                    $AesNiEncryptionEngine(ref engine) => {
-                        engine.encrypt_block(input, output);
-                    },
-                    $AesSafeEncryptionEngine(ref engine) => {
-                        engine.encrypt_block(input, output);
-                    }
-                }
-            }
-
-            #[cfg(not(target_arch = "x86"), not(target_arch = "x86_64"))]
-            fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
-                match self.engine {
-                    $AesSafeEncryptionEngine(ref engine) => {
-                        engine.encrypt_block(input, output);
-                    }
-                }
-            }
-        }
-    )
-)
-
-macro_rules! define_dec(
-    (
-        $AesDecryptor:ident,
-        $AesNiDecryptionEngine:ident,
-        $AesSafeDecryptionEngine:ident
-    ) => (
-        impl BlockDecryptor for $AesDecryptor {
-            #[cfg(target_arch = "x86")]
-            #[cfg(target_arch = "x86_64")]
-            fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
-                match self.engine {
-                    $AesNiDecryptionEngine(ref engine) => {
-                        engine.decrypt_block(input, output);
-                    },
-                    $AesSafeDecryptionEngine(ref engine) => {
-                        engine.decrypt_block(input, output);
-                    }
-                }
-            }
-
-            #[cfg(not(target_arch = "x86"), not(target_arch = "x86_64"))]
-            fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
-                match self.engine {
-                    $AesSafeDecryptionEngine(ref engine) => {
-                        engine.decrypt_block(input, output);
-                    }
-                }
-            }
-        }
-    )
-)
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesEncryptionEngine128 {
-    AesNiEncryptionEngine128(AesNi128Encryptor),
-    AesSafeEncryptionEngine128(AesSafe128Encryptor)
-}
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesEncryptionEngine128 {
-    AesSafeEncryptionEngine128(AesSafe128Encryptor)
-}
-
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesDecryptionEngine128 {
-    AesNiDecryptionEngine128(AesNi128Decryptor),
-    AesSafeDecryptionEngine128(AesSafe128Decryptor)
-}
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesDecryptionEngine128 {
-    AesSafeDecryptionEngine128(AesSafe128Decryptor)
-}
-
-define_struct!(Aes128Encryptor, AesEncryptionEngine128)
-define_struct!(Aes128Decryptor, AesDecryptionEngine128)
-define_impl!(
-    Aes128Encryptor,
-    AesNiEncryptionEngine128 => AesNi128Encryptor,
-    AesSafeEncryptionEngine128 => AesSafe128Encryptor)
-define_impl!(
-    Aes128Decryptor,
-    AesNiDecryptionEngine128 => AesNi128Decryptor,
-    AesSafeDecryptionEngine128 => AesSafe128Decryptor)
-define_block!(Aes128Encryptor)
-define_block!(Aes128Decryptor)
-define_enc!(
-    Aes128Encryptor,
-    AesNiEncryptionEngine128,
-    AesSafeEncryptionEngine128)
-define_dec!(
-    Aes128Decryptor,
-    AesNiDecryptionEngine128,
-    AesSafeDecryptionEngine128)
-
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesEncryptionEngine192 {
-    AesSafeEncryptionEngine192(AesSafe192Encryptor)
-}
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesEncryptionEngine192 {
-    AesNiEncryptionEngine192(AesNi192Encryptor),
-    AesSafeEncryptionEngine192(AesSafe192Encryptor)
-}
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesDecryptionEngine192 {
-    AesSafeDecryptionEngine192(AesSafe192Decryptor)
-}
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesDecryptionEngine192 {
-    AesNiDecryptionEngine192(AesNi192Decryptor),
-    AesSafeDecryptionEngine192(AesSafe192Decryptor)
-}
-
-define_struct!(Aes192Encryptor, AesEncryptionEngine192)
-define_struct!(Aes192Decryptor, AesDecryptionEngine192)
-define_impl!(
-    Aes192Encryptor,
-    AesNiEncryptionEngine192 => AesNi192Encryptor,
-    AesSafeEncryptionEngine192 => AesSafe192Encryptor)
-define_impl!(
-    Aes192Decryptor,
-    AesNiDecryptionEngine192 => AesNi192Decryptor,
-    AesSafeDecryptionEngine192 => AesSafe192Decryptor)
-define_block!(Aes192Encryptor)
-define_block!(Aes192Decryptor)
-define_enc!(
-    Aes192Encryptor,
-    AesNiEncryptionEngine192,
-    AesSafeEncryptionEngine192)
-define_dec!(
-    Aes192Decryptor,
-    AesNiDecryptionEngine192,
-    AesSafeDecryptionEngine192)
-
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesEncryptionEngine256 {
-    AesSafeEncryptionEngine256(AesSafe256Encryptor)
-}
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesEncryptionEngine256 {
-    AesNiEncryptionEngine256(AesNi256Encryptor),
-    AesSafeEncryptionEngine256(AesSafe256Encryptor)
-}
-
-#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
-enum AesDecryptionEngine256 {
-    AesSafeDecryptionEngine256(AesSafe256Decryptor)
-}
-
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-enum AesDecryptionEngine256 {
-    AesNiDecryptionEngine256(AesNi256Decryptor),
-    AesSafeDecryptionEngine256(AesSafe256Decryptor)
-}
-
-define_struct!(Aes256Encryptor, AesEncryptionEngine256)
-define_struct!(Aes256Decryptor, AesDecryptionEngine256)
-define_impl!(
-    Aes256Encryptor,
-    AesNiEncryptionEngine256 => AesNi256Encryptor,
-    AesSafeEncryptionEngine256 => AesSafe256Encryptor)
-define_impl!(
-    Aes256Decryptor,
-    AesNiDecryptionEngine256 => AesNi256Decryptor,
-    AesSafeDecryptionEngine256 => AesSafe256Decryptor)
-define_block!(Aes256Encryptor)
-define_block!(Aes256Decryptor)
-define_enc!(
-    Aes256Encryptor,
-    AesNiEncryptionEngine256,
-    AesSafeEncryptionEngine256)
-define_dec!(
-    Aes256Decryptor,
-    AesNiDecryptionEngine256,
-    AesSafeDecryptionEngine256)
-
-*/
-
-
-/*
 use aessafe;
-use blockmodes;
-use symmetriccipher::{Encryptor, Decryptor};
+use blockmodes::{PaddingProcessor, EcbEncryptor, EcbDecryptor, CbcEncryptor, CbcDecryptor, CtrMode,
+    CtrModeX8};
+use symmetriccipher::{Encryptor, Decryptor, SynchronousStreamCipher};
 use util::supports_aesni;
 
-use std;
+/// AES key size
+pub enum KeySize {
+    KeySize128,
+    KeySize192,
+    KeySize256
+}
 
+/// Get the best implementation of an EcbEncryptor
 #[cfg(target_arch = "x86")]
 #[cfg(target_arch = "x86_64")]
-pub fn aes_128_ecb_encryptor(key: &[u8]) -> ~Encryptor {
-    use aesni;
+pub fn ecb_encryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        padding: X) -> ~Encryptor {
     if supports_aesni() {
-        let m = aesni::AesNi128Encryptor::new(key);
-        ~blockmodes::EcbNoPaddingEncryptor::new(m) as ~Encryptor
+        match key_size {
+            KeySize128 => {
+                let aes_enc = aesni::AesNi128Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+            KeySize192 => {
+                let aes_enc = aesni::AesNi192Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+            KeySize256 => {
+                let aes_enc = aesni::AesNi256Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+        }
     } else {
-        let m = aessafe::AesSafe128Encryptor::new(key);
-        ~blockmodes::EcbNoPaddingEncryptor::new(m) as ~Encryptor
+        match key_size {
+            KeySize128 => {
+                let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+            KeySize192 => {
+                let aes_enc = aessafe::AesSafe192Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+            KeySize256 => {
+                let aes_enc = aessafe::AesSafe256Encryptor::new(key);
+                let enc = ~EcbEncryptor::new(aes_enc, padding);
+                enc as ~Encryptor
+            }
+        }
     }
 }
 
-trait T {
-    fn t(&self);
+/// Get the best implementation of an EcbEncryptor
+#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
+pub fn ecb_encryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        padding: X) -> ~Encryptor {
+    match key_size {
+        KeySize128 => {
+            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+            let enc = ~EcbEncryptor::new(aes_enc, padding);
+            enc as ~Encryptor
+        }
+        KeySize192 => {
+            let aes_enc = aessafe::AesSafe192Encryptor::new(key);
+            let enc = ~EcbEncryptor::new(aes_enc, padding);
+            enc as ~Encryptor
+        }
+        KeySize256 => {
+            let aes_enc = aessafe::AesSafe256Encryptor::new(key);
+            let enc = ~EcbEncryptor::new(aes_enc, padding);
+            enc as ~Encryptor
+        }
+    }
 }
 
-struct S<'self, N> { val: &'self N }
-
-impl <'self, N: std::fmt::Default> T for S<'self, N> {
-    fn t(&self) { println!("val: {}", *self.val); }
+/// Get the best implementation of an EcbDecryptor
+#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+pub fn ecb_decryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        padding: X) -> ~Decryptor {
+    if supports_aesni() {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aesni::AesNi128Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+            KeySize192 => {
+                let aes_dec = aesni::AesNi192Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+            KeySize256 => {
+                let aes_dec = aesni::AesNi256Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+        }
+    } else {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aessafe::AesSafe128Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+            KeySize192 => {
+                let aes_dec = aessafe::AesSafe192Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+            KeySize256 => {
+                let aes_dec = aessafe::AesSafe256Decryptor::new(key);
+                let dec = ~EcbDecryptor::new(aes_dec, padding);
+                dec as ~Decryptor
+            }
+        }
+    }
 }
 
-fn test() -> ~T {
-    let x = 1;
-    ~S {val: &x} as ~T
+/// Get the best implementation of an EcbDecryptor
+#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
+pub fn ecb_decryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        padding: X) -> ~Decryptor {
+    match key_size {
+        KeySize128 => {
+            let aes_dec = aessafe::AesSafe128Decryptor::new(key);
+            let dec = ~EcbDecryptor::new(aes_dec, padding);
+            dec as ~Decryptor
+        }
+        KeySize192 => {
+            let aes_dec = aessafe::AesSafe192Decryptor::new(key);
+            let dec = ~EcbDecryptor::new(aes_dec, padding);
+            dec as ~Decryptor
+        }
+        KeySize256 => {
+            let aes_dec = aessafe::AesSafe256Decryptor::new(key);
+            let dec = ~EcbDecryptor::new(aes_dec, padding);
+            dec as ~Decryptor
+        }
+    }
 }
-*/
+
+/// Get the best implementation of a CbcEncryptor
+#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+pub fn cbc_encryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        iv: &[u8],
+        padding: X) -> ~Encryptor {
+    if supports_aesni() {
+        match key_size {
+            KeySize128 => {
+                let aes_enc = aesni::AesNi128Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+            KeySize192 => {
+                let aes_enc = aesni::AesNi192Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+            KeySize256 => {
+                let aes_enc = aesni::AesNi256Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+        }
+    } else {
+        match key_size {
+            KeySize128 => {
+                let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+            KeySize192 => {
+                let aes_enc = aessafe::AesSafe192Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+            KeySize256 => {
+                let aes_enc = aessafe::AesSafe256Encryptor::new(key);
+                let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+                enc as ~Encryptor
+            }
+        }
+    }
+}
+
+/// Get the best implementation of a CbcEncryptor
+#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
+pub fn cbc_encryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        padding: X) -> ~Encryptor {
+    match key_size {
+        KeySize128 => {
+            let aes_enc = aessafe::AesSafe128Encryptor::new(key);
+            let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+            enc as ~Encryptor
+        }
+        KeySize192 => {
+            let aes_enc = aessafe::AesSafe192Encryptor::new(key);
+            let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+            enc as ~Encryptor
+        }
+        KeySize256 => {
+            let aes_enc = aessafe::AesSafe256Encryptor::new(key);
+            let enc = ~CbcEncryptor::new(aes_enc, padding, iv.to_owned());
+            enc as ~Encryptor
+        }
+    }
+}
+
+/// Get the best implementation of a CbcDecryptor
+#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+pub fn cbc_decryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        iv: &[u8],
+        padding: X) -> ~Decryptor {
+    if supports_aesni() {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aesni::AesNi128Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+            KeySize192 => {
+                let aes_dec = aesni::AesNi192Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+            KeySize256 => {
+                let aes_dec = aesni::AesNi256Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+        }
+    } else {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aessafe::AesSafe128Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+            KeySize192 => {
+                let aes_dec = aessafe::AesSafe192Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+            KeySize256 => {
+                let aes_dec = aessafe::AesSafe256Decryptor::new(key);
+                let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+                dec as ~Decryptor
+            }
+        }
+    }
+}
+
+/// Get the best implementation of a CbcDecryptor
+#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
+pub fn cbc_decryptor<X: PaddingProcessor + Send>(
+        key_size: KeySize,
+        key: &[u8],
+        iv: &[u8],
+        padding: X) -> ~Decryptor {
+    match key_size {
+        KeySize128 => {
+            let aes_dec = aessafe::AesSafe128Decryptor::new(key);
+            let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+            dec as ~Decryptor
+        }
+        KeySize192 => {
+            let aes_dec = aessafe::AesSafe192Decryptor::new(key);
+            let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+            dec as ~Decryptor
+        }
+        KeySize256 => {
+            let aes_dec = aessafe::AesSafe256Decryptor::new(key);
+            let dec = ~CbcDecryptor::new(aes_dec, padding, iv.to_owned());
+            dec as ~Decryptor
+        }
+    }
+}
+
+/// Get the best implementation of a Ctr
+#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+pub fn ctr(
+        key_size: KeySize,
+        key: &[u8],
+        iv: &[u8]) -> ~SynchronousStreamCipher {
+    if supports_aesni() {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aesni::AesNi128Encryptor::new(key);
+                let dec = ~CtrMode::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+            KeySize192 => {
+                let aes_dec = aesni::AesNi192Encryptor::new(key);
+                let dec = ~CtrMode::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+            KeySize256 => {
+                let aes_dec = aesni::AesNi256Encryptor::new(key);
+                let dec = ~CtrMode::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+        }
+    } else {
+        match key_size {
+            KeySize128 => {
+                let aes_dec = aessafe::AesSafe128EncryptorX8::new(key);
+                let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+            KeySize192 => {
+                let aes_dec = aessafe::AesSafe192EncryptorX8::new(key);
+                let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+            KeySize256 => {
+                let aes_dec = aessafe::AesSafe256EncryptorX8::new(key);
+                let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+                dec as ~SynchronousStreamCipher
+            }
+        }
+    }
+}
+
+/// Get the best implementation of a Ctr
+#[cfg(not(target_arch = "x86", target_arch = "x86_64"))]
+pub fn ctr(
+        key_size: KeySize,
+        key: &[u8],
+        iv: &[u8]) -> ~SynchronousStreamCipher {
+    match key_size {
+        KeySize128 => {
+            let aes_dec = aessafe::AesSafe128Encryptor::new(key);
+            let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+            dec as ~SynchronousStreamCipher
+        }
+        KeySize192 => {
+            let aes_dec = aessafe::AesSafe192Encryptor::new(key);
+            let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+            dec as ~SynchronousStreamCipher
+        }
+        KeySize256 => {
+            let aes_dec = aessafe::AesSafe256Encryptor::new(key);
+            let dec = ~CtrModeX8::new(aes_dec, iv.to_owned());
+            dec as ~SynchronousStreamCipher
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
-//    use aes::*;
+    use aes::ctr;
 
     #[cfg(target_arch = "x86")]
     #[cfg(target_arch = "x86_64")]
@@ -449,38 +521,6 @@ mod test {
         }
     }
 
-/*
-    #[test]
-    fn testAesDefault128() {
-        let tests = tests128();
-        for t in tests.iter() {
-            let mut enc = Aes128Encryptor::new(t.key);
-            let mut dec = Aes128Decryptor::new(t.key);
-            run_test(&mut enc, &mut dec, t);
-        }
-    }
-
-    #[test]
-    fn testAesDefault192() {
-        let tests = tests192();
-        for t in tests.iter() {
-            let mut enc = Aes192Encryptor::new(t.key);
-            let mut dec = Aes192Decryptor::new(t.key);
-            run_test(&mut enc, &mut dec, t);
-        }
-    }
-
-    #[test]
-    fn testAesDefault256() {
-        let tests = tests256();
-        for t in tests.iter() {
-            let mut enc = Aes256Encryptor::new(t.key);
-            let mut dec = Aes256Decryptor::new(t.key);
-            run_test(&mut enc, &mut dec, t);
-        }
-    }
-*/
-
     #[cfg(target_arch = "x86")]
     #[cfg(target_arch = "x86_64")]
     #[test]
@@ -600,6 +640,45 @@ mod test {
         assert!(tmp == cipher);
         dec.decrypt_block_x8(cipher, tmp);
         assert!(tmp == plain);
+    }
+
+    #[test]
+    fn test_ctr() {
+        use buffer::{RefReadBuffer, RefWriteBuffer};
+
+        use aes::KeySize128;
+        let mut enc = ctr(KeySize128, [0u8, ..16], [0u8, ..16]);
+
+        let tin = [0u8, ..4];
+        let mut tout = [0u8, ..4];
+
+        {
+            let mut rin = RefReadBuffer::new(tin);
+            let mut rout = RefWriteBuffer::new(tout);
+            enc.encrypt(&mut rin, &mut rout, true);
+        }
+        {
+            enc.process(tin, tout);
+        }
+    }
+
+    #[test]
+    fn test_cbc() {
+        use aes::cbc_encryptor;
+        use blockmodes::PkcsPadding;
+        use buffer::{RefReadBuffer, RefWriteBuffer};
+
+        use aes::KeySize128;
+        let mut enc = cbc_encryptor(KeySize128, [0u8, ..16], [0u8, ..16], PkcsPadding);
+
+        let tin = [0u8, ..4];
+        let mut tout = [0u8, ..4];
+
+        {
+            let mut rin = RefReadBuffer::new(tin);
+            let mut rout = RefWriteBuffer::new(tout);
+            enc.encrypt(&mut rin, &mut rout, true);
+        }
     }
 }
 

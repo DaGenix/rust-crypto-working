@@ -9,7 +9,7 @@
  * NOT A FIXED TIME IMPLEMENTATION.
  */
 
-use buffer::{ReadBuffer, WriteBuffer, BufferResult};
+use buffer::{BufferResult, RefReadBuffer, RefWriteBuffer};
 use symmetriccipher::{Encryptor, Decryptor, SynchronousStreamCipher, SymmetricCipherError};
 use cryptoutil::symm_enc_or_dec;
 
@@ -52,14 +52,14 @@ impl SynchronousStreamCipher for Rc4 {
 }
 
 impl Encryptor for Rc4 {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }
 }
 
 impl Decryptor for Rc4 {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, _: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         symm_enc_or_dec(self, input, output)
     }

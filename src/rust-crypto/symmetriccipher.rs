@@ -4,7 +4,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use buffer::{ReadBuffer, WriteBuffer, BufferResult};
+use buffer::{BufferResult, RefReadBuffer, RefWriteBuffer};
+use cryptoutil::symm_enc_or_dec;
 
 pub trait BlockEncryptor {
     fn block_size(&self) -> uint;
@@ -32,15 +33,36 @@ pub enum SymmetricCipherError {
 }
 
 pub trait Encryptor {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
         -> Result<BufferResult, SymmetricCipherError>;
 }
 
 pub trait Decryptor {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, eof: bool)
         -> Result<BufferResult, SymmetricCipherError>;
 }
 
 pub trait SynchronousStreamCipher {
     fn process(&mut self, input: &[u8], output: &mut [u8]);
+}
+
+// TODO - Its a bit unclear to me why this is necessary
+impl SynchronousStreamCipher for ~SynchronousStreamCipher {
+    fn process(&mut self, input: &[u8], output: &mut [u8]) {
+        self.process(input, output);
+    }
+}
+
+impl Encryptor for ~SynchronousStreamCipher {
+    fn encrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        symm_enc_or_dec(self, input, output)
+    }
+}
+
+impl Decryptor for ~SynchronousStreamCipher {
+    fn decrypt(&mut self, input: &mut RefReadBuffer, output: &mut RefWriteBuffer, _: bool)
+            -> Result<BufferResult, SymmetricCipherError> {
+        symm_enc_or_dec(self, input, output)
+    }
 }

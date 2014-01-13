@@ -5,7 +5,10 @@
 // except according to those terms.
 
 // TODO - Optimize the XORs
+// TODO - Maybe use macros to specialize BlockEngine for encryption or decryption?
+// TODO - I think padding could be done better. Maybe macros for BlockEngine would help this too.
 
+use std;
 use std::vec;
 
 use buffer::{ReadBuffer, WriteBuffer, OwnedReadBuffer, OwnedWriteBuffer, BufferResult,
@@ -21,17 +24,18 @@ trait BlockProcessor {
     /// Process a block of data. The in_hist and out_hist parameters represent the input and output
     /// when the last block was processed. These values are necessary for certain modes.
     fn process_block(&mut self, in_hist: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]);
+}
 
+/// A PaddingProcessor handles adding or removing padding
+trait PaddingProcessor {
     /// Add padding to the last block of input data
     /// If the mode can't handle a non-full block, it signals that error by simply leaving the block
     /// as it is which will be detected as an InvalidLength error.
-    #[allow(unused_variable)]
-    fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) { }
+    fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W);
 
     /// Remove padding from the last block of output data
     /// If false is returned, the processing fails
-    #[allow(unused_variable)]
-    fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool { true }
+    fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool;
 }
 
 /// The BlockEngine is implemented as a state machine with the following states. See comments in the
@@ -49,7 +53,7 @@ enum BlockEngineState {
 /// BlockEngine buffers input and output data and handles sending complete block of data to the
 /// Processor object. Additionally, BlockEngine handles logic necessary to add or remove padding by
 /// calling the appropriate methods on the Processor object.
-struct BlockEngine<P> {
+struct BlockEngine<P, X> {
     /// The block sized expected by the Processor
     block_size: uint,
 
@@ -75,6 +79,9 @@ struct BlockEngine<P> {
     /// The processor that implements the particular block mode.
     processor: P,
 
+    /// The padding processor
+    padding: X,
+
     /// The current state of the operation.
     state: BlockEngineState
 }
@@ -94,10 +101,10 @@ fn update_history(in_hist: &mut [u8], out_hist: &mut [u8], last_in: &[u8], last_
     }
 }
 
-impl <P: BlockProcessor> BlockEngine<P> {
+impl <P: BlockProcessor, X: PaddingProcessor> BlockEngine<P, X> {
     /// Create a new BlockProcessor instance with the given processor and block_size. No history
     /// will be saved.
-    fn new(processor: P, block_size: uint) -> BlockEngine<P> {
+    fn new(processor: P, padding: X, block_size: uint) -> BlockEngine<P, X> {
         BlockEngine {
             block_size: block_size,
             in_hist: ~[],
@@ -106,6 +113,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
             out_write_scratch: Some(OwnedWriteBuffer::new(vec::from_elem(block_size, 0u8))),
             out_read_scratch: None,
             processor: processor,
+            padding: padding,
             state: FastMode
         }
     }
@@ -114,13 +122,14 @@ impl <P: BlockProcessor> BlockEngine<P> {
     /// and output history.
     fn new_with_history(
             processor: P,
+            padding: X,
             block_size: uint,
             in_hist: ~[u8],
-            out_hist: ~[u8]) -> BlockEngine<P> {
+            out_hist: ~[u8]) -> BlockEngine<P, X> {
         BlockEngine {
             in_hist: in_hist,
             out_hist: out_hist,
-            ..BlockEngine::new(processor, block_size)
+            ..BlockEngine::new(processor, padding, block_size)
         }
     }
 
@@ -302,10 +311,10 @@ impl <P: BlockProcessor> BlockEngine<P> {
                     //    the padding block (in in_scratch) and write it to the now-empty
                     //    out_scratch.
                     if !self.in_scratch.is_full() {
-                        self.processor.pad_input(&mut self.in_scratch);
+                        self.padding.pad_input(&mut self.in_scratch);
                         if self.in_scratch.is_full() {
                             process_scratch();
-                            if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                            if self.padding.strip_output(self.out_read_scratch.get_mut_ref()) {
                                 self.state = Finished;
                             } else {
                                 self.state = Error(InvalidPadding);
@@ -317,11 +326,11 @@ impl <P: BlockProcessor> BlockEngine<P> {
                         }
                     } else {
                         process_scratch();
-                        self.processor.pad_input(&mut self.in_scratch);
+                        self.padding.pad_input(&mut self.in_scratch);
                         if self.in_scratch.is_full() {
                             self.state = LastInput2;
                         } else if self.in_scratch.is_empty() {
-                            if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                            if self.padding.strip_output(self.out_read_scratch.get_mut_ref()) {
                                 self.state = Finished;
                             } else {
                                 self.state = Error(InvalidPadding);
@@ -341,7 +350,7 @@ impl <P: BlockProcessor> BlockEngine<P> {
                     if rout.is_empty() {
                         self.out_write_scratch = Some(rout.into_write_buffer());
                         process_scratch();
-                        if self.processor.strip_output(self.out_read_scratch.get_mut_ref()) {
+                        if self.padding.strip_output(self.out_read_scratch.get_mut_ref()) {
                             self.state = Finished;
                         } else {
                             self.state = Error(InvalidPadding);
@@ -393,51 +402,100 @@ impl <P: BlockProcessor> BlockEngine<P> {
     }
 }
 
-fn add_pkcs_padding<W: WriteBuffer>(input_buffer: &mut W) {
-    let rem = input_buffer.remaining();
-    assert!(rem != 0 && rem <= 255);
-    for v in input_buffer.take_remaining().mut_iter() {
-        *v = rem as u8;
-    }
+/// No padding mode for ECB and CBC encryption
+pub struct NoPadding;
+
+impl PaddingProcessor for NoPadding {
+    fn pad_input<W: WriteBuffer>(&mut self, _: &mut W) { }
+    fn strip_output<R: ReadBuffer>(&mut self, _: &mut R) -> bool { true }
 }
 
-fn strip_pkcs_padding<R: ReadBuffer>(output_buffer: &mut R) -> bool {
-    let last_byte: u8;
-    {
-        let data = output_buffer.peek_remaining();
-        last_byte = *data.last();
-        for &x in data.iter().invert().take(last_byte as uint) {
-            if x != last_byte {
-                return false;
+/// PKCS padding mode for ECB and CBC encryption
+pub struct PkcsPadding;
+
+// This class implements both encryption padding, where padding is added, and decryption padding,
+// where padding is stripped. Since BlockEngine doesn't know if its an Encryption or Decryption
+// operation, it will call both methods if given a chance. So, this class can't be passed directly
+// to BlockEngine. Instead, it must be wrapped with EncPadding or DecPadding which will ensure that
+// only the propper methods are called. The client of the library, however, doesn't have to
+// distinguish encryption padding handling from decryption padding handline, which is the whole
+// point.
+impl PaddingProcessor for PkcsPadding {
+    fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) {
+        let rem = input_buffer.remaining();
+        assert!(rem != 0 && rem <= 255);
+        for v in input_buffer.take_remaining().mut_iter() {
+            *v = rem as u8;
+        }
+    }
+    fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool {
+        let last_byte: u8;
+        {
+            let data = output_buffer.peek_remaining();
+            last_byte = *data.last();
+            for &x in data.iter().invert().take(last_byte as uint) {
+                if x != last_byte {
+                    return false;
+                }
             }
         }
+        output_buffer.truncate(last_byte as uint);
+        true
     }
-    output_buffer.truncate(last_byte as uint);
-    true
 }
 
-struct EcbNoPaddingEncryptorProcessor<T> {
+/// Wraps a PaddingProcessor so that only pad_input() will actually be called.
+struct EncPadding<X> {
+    padding: X
+}
+
+impl <X: PaddingProcessor> EncPadding<X> {
+    fn wrap(p: X) -> EncPadding<X> { EncPadding { padding: p } }
+}
+
+impl <X: PaddingProcessor> PaddingProcessor for EncPadding<X> {
+    fn pad_input<W: WriteBuffer>(&mut self, a: &mut W) { self.padding.pad_input(a); }
+    fn strip_output<R: ReadBuffer>(&mut self, _: &mut R) -> bool { true }
+}
+
+/// Wraps a PaddingProcessor so that only strip_output() will actually be called.
+struct DecPadding<X> {
+    padding: X
+}
+
+impl <X: PaddingProcessor> DecPadding<X> {
+    fn wrap(p: X) -> DecPadding<X> { DecPadding { padding: p } }
+}
+
+impl <X: PaddingProcessor> PaddingProcessor for DecPadding<X> {
+    fn pad_input<W: WriteBuffer>(&mut self, _: &mut W) { }
+    fn strip_output<R: ReadBuffer>(&mut self, a: &mut R) -> bool { self.padding.strip_output(a) }
+}
+
+struct EcbEncryptorProcessor<T> {
     algo: T
 }
 
-impl <T: BlockEncryptor> BlockProcessor for EcbNoPaddingEncryptorProcessor<T> {
+impl <T: BlockEncryptor> BlockProcessor for EcbEncryptorProcessor<T> {
     fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.encrypt_block(input, output);
     }
 }
 
-pub struct EcbNoPaddingEncryptor<T> {
-    priv block_engine: BlockEngine<EcbNoPaddingEncryptorProcessor<T>>
+/// ECB Encryption mode
+pub struct EcbEncryptor<T, X> {
+    priv block_engine: BlockEngine<EcbEncryptorProcessor<T>, X>
 }
 
-impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
-    pub fn new(algo: T) -> EcbNoPaddingEncryptor<T> {
+impl <T: BlockEncryptor, X: PaddingProcessor> EcbEncryptor<T, X> {
+    /// Create a new ECB encryption mode object
+    pub fn new(algo: T, padding: X) -> EcbEncryptor<T, EncPadding<X>> {
         let block_size = algo.block_size();
-        let processor = EcbNoPaddingEncryptorProcessor {
+        let processor = EcbEncryptorProcessor {
             algo: algo
         };
-        EcbNoPaddingEncryptor {
-            block_engine: BlockEngine::new(processor, block_size)
+        EcbEncryptor {
+            block_engine: BlockEngine::new(processor, EncPadding::wrap(padding), block_size)
         }
     }
     pub fn reset(&mut self) {
@@ -445,35 +503,37 @@ impl <T: BlockEncryptor> EcbNoPaddingEncryptor<T> {
     }
 }
 
-impl <T: BlockEncryptor> Encryptor for EcbNoPaddingEncryptor<T> {
+impl <T: BlockEncryptor, X: PaddingProcessor> Encryptor for EcbEncryptor<T, X> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
 
-struct EcbNoPaddingDecryptorProcessor<T> {
+struct EcbDecryptorProcessor<T> {
     algo: T
 }
 
-impl <T: BlockDecryptor> BlockProcessor for EcbNoPaddingDecryptorProcessor<T> {
+impl <T: BlockDecryptor> BlockProcessor for EcbDecryptorProcessor<T> {
     fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, output);
     }
 }
 
-pub struct EcbNoPaddingDecryptor<T> {
-    priv block_engine: BlockEngine<EcbNoPaddingDecryptorProcessor<T>>
+/// ECB Decryption mode
+pub struct EcbDecryptor<T, X> {
+    priv block_engine: BlockEngine<EcbDecryptorProcessor<T>, X>
 }
 
-impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
-    pub fn new(algo: T) -> EcbNoPaddingDecryptor<T> {
+impl <T: BlockDecryptor, X: PaddingProcessor> EcbDecryptor<T, X> {
+    /// Create a new ECB decryption mode object
+    pub fn new(algo: T, padding: X) -> EcbDecryptor<T, DecPadding<X>> {
         let block_size = algo.block_size();
-        let processor = EcbNoPaddingDecryptorProcessor {
+        let processor = EcbDecryptorProcessor {
             algo: algo
         };
-        EcbNoPaddingDecryptor {
-            block_engine: BlockEngine::new(processor, block_size)
+        EcbDecryptor {
+            block_engine: BlockEngine::new(processor, DecPadding::wrap(padding), block_size)
         }
     }
     pub fn reset(&mut self) {
@@ -481,97 +541,19 @@ impl <T: BlockDecryptor> EcbNoPaddingDecryptor<T> {
     }
 }
 
-impl <T: BlockDecryptor> Decryptor for EcbNoPaddingDecryptor<T> {
+impl <T: BlockDecryptor, X: PaddingProcessor> Decryptor for EcbDecryptor<T, X> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
 
-struct EcbPkcsPaddingEncryptorProcessor<T> {
-    algo: T
-}
-
-impl <T: BlockEncryptor> BlockProcessor for EcbPkcsPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
-        self.algo.encrypt_block(input, output);
-    }
-    fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) {
-        add_pkcs_padding(input_buffer);
-    }
-}
-
-pub struct EcbPkcsPaddingEncryptor<T> {
-    priv block_engine: BlockEngine<EcbPkcsPaddingEncryptorProcessor<T>>
-}
-
-impl <T: BlockEncryptor> EcbPkcsPaddingEncryptor<T> {
-    pub fn new(algo: T) -> EcbPkcsPaddingEncryptor<T> {
-        let block_size = algo.block_size();
-        let processor = EcbPkcsPaddingEncryptorProcessor {
-            algo: algo
-        };
-        EcbPkcsPaddingEncryptor {
-            block_engine: BlockEngine::new(processor, block_size)
-        }
-    }
-    pub fn reset(&mut self) {
-        self.block_engine.reset();
-    }
-}
-
-impl <T: BlockEncryptor> Encryptor for EcbPkcsPaddingEncryptor<T> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        self.block_engine.process(input, output, eof)
-    }
-}
-
-struct EcbPkcsPaddingDecryptorProcessor<T> {
-    algo: T
-}
-
-impl <T: BlockDecryptor> BlockProcessor for EcbPkcsPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, _: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
-        self.algo.decrypt_block(input, output);
-    }
-    fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool {
-        strip_pkcs_padding(output_buffer)
-    }
-}
-
-pub struct EcbPkcsPaddingDecryptor<T> {
-    priv block_engine: BlockEngine<EcbPkcsPaddingDecryptorProcessor<T>>
-}
-
-impl <T: BlockDecryptor> EcbPkcsPaddingDecryptor<T> {
-    pub fn new(algo: T) -> EcbPkcsPaddingDecryptor<T> {
-        let block_size = algo.block_size();
-        let processor = EcbPkcsPaddingDecryptorProcessor {
-            algo: algo
-        };
-        EcbPkcsPaddingDecryptor {
-            block_engine: BlockEngine::new(processor, block_size)
-        }
-    }
-    pub fn reset(&mut self) {
-        self.block_engine.reset();
-    }
-}
-
-impl <T: BlockDecryptor> Decryptor for EcbPkcsPaddingDecryptor<T> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        self.block_engine.process(input, output, eof)
-    }
-}
-
-struct CbcNoPaddingEncryptorProcessor<T> {
+struct CbcEncryptorProcessor<T> {
     algo: T,
     temp: ~[u8]
 }
 
-impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
+impl <T: BlockEncryptor> BlockProcessor for CbcEncryptorProcessor<T> {
     fn process_block(&mut self, _: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]) {
         for ((&x, &y), o) in input.iter().zip(out_hist.iter()).zip(self.temp.mut_iter()) {
             *o = x ^ y;
@@ -580,19 +562,26 @@ impl <T: BlockEncryptor> BlockProcessor for CbcNoPaddingEncryptorProcessor<T> {
     }
 }
 
-pub struct CbcNoPaddingEncryptor<T> {
-    priv block_engine: BlockEngine<CbcNoPaddingEncryptorProcessor<T>>
+/// CBC encryption mode
+pub struct CbcEncryptor<T, X> {
+    priv block_engine: BlockEngine<CbcEncryptorProcessor<T>, X>
 }
 
-impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
-    pub fn new(algo: T, iv: ~[u8]) -> CbcNoPaddingEncryptor<T> {
+impl <T: BlockEncryptor, X: PaddingProcessor> CbcEncryptor<T, X> {
+    /// Create a new CBC encryption mode object
+    pub fn new(algo: T, padding: X, iv: ~[u8]) -> CbcEncryptor<T, EncPadding<X>> {
         let block_size = algo.block_size();
-        let processor = CbcNoPaddingEncryptorProcessor {
+        let processor = CbcEncryptorProcessor {
             algo: algo,
             temp: vec::from_elem(block_size, 0u8)
         };
-        CbcNoPaddingEncryptor {
-            block_engine: BlockEngine::new_with_history(processor, block_size, ~[], iv)
+        CbcEncryptor {
+            block_engine: BlockEngine::new_with_history(
+                processor,
+                EncPadding::wrap(padding),
+                block_size,
+                ~[],
+                iv)
         }
     }
     pub fn reset(&mut self, iv: &[u8]) {
@@ -600,19 +589,19 @@ impl <T: BlockEncryptor> CbcNoPaddingEncryptor<T> {
     }
 }
 
-impl <T: BlockEncryptor> Encryptor for CbcNoPaddingEncryptor<T> {
+impl <T: BlockEncryptor, X: PaddingProcessor> Encryptor for CbcEncryptor<T, X> {
     fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
     }
 }
 
-struct CbcNoPaddingDecryptorProcessor<T> {
+struct CbcDecryptorProcessor<T> {
     algo: T,
     temp: ~[u8]
 }
 
-impl <T: BlockDecryptor> BlockProcessor for CbcNoPaddingDecryptorProcessor<T> {
+impl <T: BlockDecryptor> BlockProcessor for CbcDecryptorProcessor<T> {
     fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
         self.algo.decrypt_block(input, self.temp);
         for ((&x, &y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
@@ -621,19 +610,26 @@ impl <T: BlockDecryptor> BlockProcessor for CbcNoPaddingDecryptorProcessor<T> {
     }
 }
 
-pub struct CbcNoPaddingDecryptor<T> {
-    priv block_engine: BlockEngine<CbcNoPaddingDecryptorProcessor<T>>
+/// CBC decryption mode
+pub struct CbcDecryptor<T, X> {
+    priv block_engine: BlockEngine<CbcDecryptorProcessor<T>, X>
 }
 
-impl <T: BlockDecryptor> CbcNoPaddingDecryptor<T> {
-    pub fn new(algo: T, iv: ~[u8]) -> CbcNoPaddingDecryptor<T> {
+impl <T: BlockDecryptor, X: PaddingProcessor> CbcDecryptor<T, X> {
+    /// Create a new CBC decryption mode object
+    pub fn new(algo: T, padding: X, iv: ~[u8]) -> CbcDecryptor<T, DecPadding<X>> {
         let block_size = algo.block_size();
-        let processor = CbcNoPaddingDecryptorProcessor {
+        let processor = CbcDecryptorProcessor {
             algo: algo,
             temp: vec::from_elem(block_size, 0u8)
         };
-        CbcNoPaddingDecryptor {
-            block_engine: BlockEngine::new_with_history(processor, block_size, iv, ~[])
+        CbcDecryptor {
+            block_engine: BlockEngine::new_with_history(
+                processor,
+                DecPadding::wrap(padding),
+                block_size,
+                iv,
+                ~[])
         }
     }
     pub fn reset(&mut self, iv: &[u8]) {
@@ -641,95 +637,7 @@ impl <T: BlockDecryptor> CbcNoPaddingDecryptor<T> {
     }
 }
 
-impl <T: BlockDecryptor> Decryptor for CbcNoPaddingDecryptor<T> {
-    fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        self.block_engine.process(input, output, eof)
-    }
-}
-
-struct CbcPkcsPaddingEncryptorProcessor<T> {
-    algo: T,
-    temp: ~[u8]
-}
-
-impl <T: BlockEncryptor> BlockProcessor for CbcPkcsPaddingEncryptorProcessor<T> {
-    fn process_block(&mut self, _: &[u8], out_hist: &[u8], input: &[u8], output: &mut [u8]) {
-        for ((&x, &y), o) in input.iter().zip(out_hist.iter()).zip(self.temp.mut_iter()) {
-            *o = x ^ y;
-        }
-        self.algo.encrypt_block(self.temp, output);
-    }
-    fn pad_input<W: WriteBuffer>(&mut self, input_buffer: &mut W) {
-        add_pkcs_padding(input_buffer);
-    }
-}
-
-pub struct CbcPkcsPaddingEncryptor<T> {
-    priv block_engine: BlockEngine<CbcPkcsPaddingEncryptorProcessor<T>>
-}
-
-impl <T: BlockEncryptor> CbcPkcsPaddingEncryptor<T> {
-    pub fn new(algo: T, iv: ~[u8]) -> CbcPkcsPaddingEncryptor<T> {
-        let block_size = algo.block_size();
-        let processor = CbcPkcsPaddingEncryptorProcessor {
-            algo: algo,
-            temp: vec::from_elem(block_size, 0u8)
-        };
-        CbcPkcsPaddingEncryptor {
-            block_engine: BlockEngine::new_with_history(processor, block_size, ~[], iv)
-        }
-    }
-    pub fn reset(&mut self, iv: &[u8]) {
-        self.block_engine.reset_with_history(&[], iv);
-    }
-}
-
-impl <T: BlockEncryptor> Encryptor for CbcPkcsPaddingEncryptor<T> {
-    fn encrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
-            -> Result<BufferResult, SymmetricCipherError> {
-        self.block_engine.process(input, output, eof)
-    }
-}
-
-struct CbcPkcsPaddingDecryptorProcessor<T> {
-    algo: T,
-    temp: ~[u8]
-}
-
-impl <T: BlockDecryptor> BlockProcessor for CbcPkcsPaddingDecryptorProcessor<T> {
-    fn process_block(&mut self, in_hist: &[u8], _: &[u8], input: &[u8], output: &mut [u8]) {
-        self.algo.decrypt_block(input, self.temp);
-        for ((&x, &y), o) in self.temp.iter().zip(in_hist.iter()).zip(output.mut_iter()) {
-            *o = x ^ y;
-        }
-    }
-    fn strip_output<R: ReadBuffer>(&mut self, output_buffer: &mut R) -> bool {
-        strip_pkcs_padding(output_buffer)
-    }
-}
-
-pub struct CbcPkcsPaddingDecryptor<T> {
-    priv block_engine: BlockEngine<CbcPkcsPaddingDecryptorProcessor<T>>
-}
-
-impl <T: BlockDecryptor> CbcPkcsPaddingDecryptor<T> {
-    pub fn new(algo: T, iv: ~[u8]) -> CbcPkcsPaddingDecryptor<T> {
-        let block_size = algo.block_size();
-        let processor = CbcPkcsPaddingDecryptorProcessor {
-            algo: algo,
-            temp: vec::from_elem(block_size, 0u8)
-        };
-        CbcPkcsPaddingDecryptor {
-            block_engine: BlockEngine::new_with_history(processor, block_size, iv, ~[])
-        }
-    }
-    pub fn reset(&mut self, iv: &[u8]) {
-        self.block_engine.reset_with_history(iv, &[]);
-    }
-}
-
-impl <T: BlockDecryptor> Decryptor for CbcPkcsPaddingDecryptor<T> {
+impl <T: BlockDecryptor, X: PaddingProcessor> Decryptor for CbcDecryptor<T, X> {
     fn decrypt<R: ReadBuffer, W: WriteBuffer>(&mut self, input: &mut R, output: &mut W, eof: bool)
             -> Result<BufferResult, SymmetricCipherError> {
         self.block_engine.process(input, output, eof)
@@ -747,6 +655,7 @@ fn add_ctr(ctr: &mut [u8], mut ammount: u8) {
     }
 }
 
+/// CTR Mode
 pub struct CtrMode<A> {
     priv algo: A,
     priv ctr: ~[u8],
@@ -754,6 +663,7 @@ pub struct CtrMode<A> {
 }
 
 impl <A: BlockEncryptor> CtrMode<A> {
+    /// Create a new CTR object
     pub fn new(algo: A, ctr: ~[u8]) -> CtrMode<A> {
         let block_size = algo.block_size();
         CtrMode {
@@ -808,6 +718,7 @@ impl <A: BlockEncryptor> Decryptor for CtrMode<A> {
     }
 }
 
+/// CTR Mode that operates on 8 blocks at a time
 pub struct CtrModeX8<A> {
     priv algo: A,
     priv ctr_x8: ~[u8],
@@ -822,6 +733,7 @@ fn construct_ctr_x8(in_ctr: &[u8], out_ctr_x8: &mut [u8]) {
 }
 
 impl <A: BlockEncryptorX8> CtrModeX8<A> {
+    /// Create a new CTR object that operates on 8 blocks at a time
     pub fn new(algo: A, ctr: &[u8]) -> CtrModeX8<A> {
         let block_size = algo.block_size();
         let mut ctr_x8 = vec::from_elem(block_size * 8, 0u8);
@@ -884,9 +796,8 @@ impl <A: BlockEncryptorX8> Decryptor for CtrModeX8<A> {
 #[cfg(test)]
 mod test {
     use aessafe;
-    use blockmodes::{EcbNoPaddingEncryptor, EcbNoPaddingDecryptor, EcbPkcsPaddingEncryptor,
-        EcbPkcsPaddingDecryptor, CbcNoPaddingEncryptor, CbcNoPaddingDecryptor,
-        CbcPkcsPaddingEncryptor, CbcPkcsPaddingDecryptor, CtrMode, CtrModeX8};
+    use blockmodes::{EcbEncryptor, EcbDecryptor, CbcEncryptor, CbcDecryptor, CtrMode, CtrModeX8,
+        NoPadding, PkcsPadding};
     use buffer::{RefReadBuffer, RefWriteBuffer};
     use symmetriccipher::{Encryptor, Decryptor};
 
@@ -1046,58 +957,6 @@ mod test {
         ]
     }
 
-    fn get_aes_ecb_no_padding(test: &EcbTest)
-            -> (EcbNoPaddingEncryptor<aessafe::AesSafe128Encryptor>,
-                EcbNoPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
-        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
-        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
-        (EcbNoPaddingEncryptor::new(aes_enc), EcbNoPaddingDecryptor::new(aes_dec))
-    }
-
-    fn get_aes_ecb_pkcs_padding(test: &EcbTest)
-            -> (EcbPkcsPaddingEncryptor<aessafe::AesSafe128Encryptor>,
-                EcbPkcsPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
-        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
-        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
-        (EcbPkcsPaddingEncryptor::new(aes_enc), EcbPkcsPaddingDecryptor::new(aes_dec))
-    }
-
-    fn get_aes_cbc_no_padding(test: &CbcTest)
-            -> (CbcNoPaddingEncryptor<aessafe::AesSafe128Encryptor>,
-                CbcNoPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
-        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
-        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
-        (CbcNoPaddingEncryptor::new(aes_enc, test.iv.clone()),
-         CbcNoPaddingDecryptor::new(aes_dec, test.iv.clone()))
-    }
-
-    fn get_aes_cbc_pkcs_padding(test: &CbcTest)
-            -> (CbcPkcsPaddingEncryptor<aessafe::AesSafe128Encryptor>,
-                CbcPkcsPaddingDecryptor<aessafe::AesSafe128Decryptor>) {
-        let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
-        let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
-        (CbcPkcsPaddingEncryptor::new(aes_enc, test.iv.clone()),
-         CbcPkcsPaddingDecryptor::new(aes_dec, test.iv.clone()))
-    }
-
-    fn get_aes_ctr(test: &CtrTest)
-            -> (CtrMode<aessafe::AesSafe128Encryptor>,
-                CtrMode<aessafe::AesSafe128Encryptor>) {
-        let aes_enc_1 = aessafe::AesSafe128Encryptor::new(test.key);
-        let aes_enc_2 = aessafe::AesSafe128Encryptor::new(test.key);
-        (CtrMode::new(aes_enc_1, test.ctr.clone()),
-         CtrMode::new(aes_enc_2, test.ctr.clone()))
-    }
-
-    fn get_aes_ctr_x8(test: &CtrTest)
-            -> (CtrModeX8<aessafe::AesSafe128EncryptorX8>,
-                CtrModeX8<aessafe::AesSafe128EncryptorX8>) {
-        let aes_enc_1 = aessafe::AesSafe128EncryptorX8::new(test.key);
-        let aes_enc_2 = aessafe::AesSafe128EncryptorX8::new(test.key);
-        (CtrModeX8::new(aes_enc_1, test.ctr),
-         CtrModeX8::new(aes_enc_2, test.ctr))
-    }
-
     fn run_test_full<T: CipherTest, E: Encryptor, D: Decryptor>(
             test: &T,
             enc: &mut E,
@@ -1131,7 +990,10 @@ mod test {
     fn aes_ecb_no_padding() {
         let tests = aes_ecb_no_padding_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_ecb_no_padding(test);
+            let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut enc = EcbEncryptor::new(aes_enc, NoPadding);
+            let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+            let mut dec = EcbDecryptor::new(aes_dec, NoPadding);
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1140,7 +1002,10 @@ mod test {
     fn aes_ecb_pkcs_padding() {
         let tests = aes_ecb_pkcs_padding_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_ecb_pkcs_padding(test);
+            let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut enc = EcbEncryptor::new(aes_enc, PkcsPadding);
+            let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+            let mut dec = EcbDecryptor::new(aes_dec, PkcsPadding);
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1149,7 +1014,10 @@ mod test {
     fn aes_cbc_no_padding() {
         let tests = aes_cbc_no_padding_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_cbc_no_padding(test);
+            let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut enc = CbcEncryptor::new(aes_enc, NoPadding, test.iv.clone());
+            let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+            let mut dec = CbcDecryptor::new(aes_dec, NoPadding, test.iv.clone());
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1158,7 +1026,10 @@ mod test {
     fn aes_cbc_pkcs_padding() {
         let tests = aes_cbc_pkcs_padding_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_cbc_pkcs_padding(test);
+            let aes_enc = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut enc = CbcEncryptor::new(aes_enc, PkcsPadding, test.iv.clone());
+            let aes_dec = aessafe::AesSafe128Decryptor::new(test.key);
+            let mut dec = CbcDecryptor::new(aes_dec, PkcsPadding, test.iv.clone());
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1167,7 +1038,10 @@ mod test {
     fn aes_ctr() {
         let tests = aes_ctr_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_ctr(test);
+            let aes_enc_1 = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut enc = CtrMode::new(aes_enc_1, test.ctr.clone());
+            let aes_enc_2 = aessafe::AesSafe128Encryptor::new(test.key);
+            let mut dec = CtrMode::new(aes_enc_2, test.ctr.clone());
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1176,7 +1050,10 @@ mod test {
     fn aes_ctr_x8() {
         let tests = aes_ctr_tests();
         for test in tests.iter() {
-            let (mut enc, mut dec) = get_aes_ctr_x8(test);
+            let aes_enc_1 = aessafe::AesSafe128EncryptorX8::new(test.key);
+            let mut enc = CtrModeX8::new(aes_enc_1, test.ctr.clone());
+            let aes_enc_2 = aessafe::AesSafe128EncryptorX8::new(test.key);
+            let mut dec = CtrModeX8::new(aes_enc_2, test.ctr.clone());
             run_test_full(test, &mut enc, &mut dec);
         }
     }
@@ -1188,7 +1065,7 @@ mod test {
         let mut cipher = [3u8, ..528];
 
         let aes_enc = aessafe::AesSafe128Encryptor::new(key);
-        let mut enc = EcbNoPaddingEncryptor::new(aes_enc);
+        let mut enc = EcbEncryptor::new(aes_enc, NoPadding);
 
         bh.iter( || {
             enc.reset();
@@ -1214,7 +1091,7 @@ mod test {
         let mut cipher = [3u8, ..528];
 
         let aes_enc = aessafe::AesSafe128Encryptor::new(key);
-        let mut enc = CbcPkcsPaddingEncryptor::new(aes_enc, iv.to_owned());
+        let mut enc = CbcEncryptor::new(aes_enc, PkcsPadding, iv.to_owned());
 
         bh.iter( || {
             enc.reset(iv);

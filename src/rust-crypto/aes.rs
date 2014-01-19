@@ -12,7 +12,7 @@ use aessafe;
 use blockmodes::{PaddingProcessor, EcbEncryptor, EcbDecryptor, CbcEncryptor, CbcDecryptor, CtrMode,
     CtrModeX8};
 use symmetriccipher::{Encryptor, Decryptor, SynchronousStreamCipher};
-use util::supports_aesni;
+use util;
 
 /// AES key size
 pub enum KeySize {
@@ -28,7 +28,7 @@ pub fn ecb_encryptor<X: PaddingProcessor + Send>(
         key_size: KeySize,
         key: &[u8],
         padding: X) -> ~Encryptor {
-    if supports_aesni() {
+    if util::supports_aesni() {
         match key_size {
             KeySize128 => {
                 let aes_enc = aesni::AesNi128Encryptor::new(key);
@@ -99,7 +99,7 @@ pub fn ecb_decryptor<X: PaddingProcessor + Send>(
         key_size: KeySize,
         key: &[u8],
         padding: X) -> ~Decryptor {
-    if supports_aesni() {
+    if util::supports_aesni() {
         match key_size {
             KeySize128 => {
                 let aes_dec = aesni::AesNi128Decryptor::new(key);
@@ -171,7 +171,7 @@ pub fn cbc_encryptor<X: PaddingProcessor + Send>(
         key: &[u8],
         iv: &[u8],
         padding: X) -> ~Encryptor {
-    if supports_aesni() {
+    if util::supports_aesni() {
         match key_size {
             KeySize128 => {
                 let aes_enc = aesni::AesNi128Encryptor::new(key);
@@ -243,7 +243,7 @@ pub fn cbc_decryptor<X: PaddingProcessor + Send>(
         key: &[u8],
         iv: &[u8],
         padding: X) -> ~Decryptor {
-    if supports_aesni() {
+    if util::supports_aesni() {
         match key_size {
             KeySize128 => {
                 let aes_dec = aesni::AesNi128Decryptor::new(key);
@@ -315,7 +315,7 @@ pub fn ctr(
         key_size: KeySize,
         key: &[u8],
         iv: &[u8]) -> ~SynchronousStreamCipher {
-    if supports_aesni() {
+    if util::supports_aesni() {
         match key_size {
             KeySize128 => {
                 let aes_dec = aesni::AesNi128Encryptor::new(key);
@@ -381,15 +381,13 @@ pub fn ctr(
 
 #[cfg(test)]
 mod test {
-    use aes::ctr;
-
     #[cfg(target_arch = "x86")]
     #[cfg(target_arch = "x86_64")]
-    use aesni::*;
+    use aesni;
 
     use aessafe;
-    use symmetriccipher::*;
-    use util::*;
+    use symmetriccipher::{BlockEncryptor, BlockDecryptor, BlockEncryptorX8, BlockDecryptorX8};
+    use util;
 
     // Test vectors from:
     // http://www.inconteam.com/software-development/41-encryption/55-aes-test-vectors
@@ -525,11 +523,11 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn testAesNi128() {
-        if supports_aesni() {
+        if util::supports_aesni() {
             let tests = tests128();
             for t in tests.iter() {
-                let mut enc = AesNi128Encryptor::new(t.key);
-                let mut dec = AesNi128Decryptor::new(t.key);
+                let mut enc = aesni::AesNi128Encryptor::new(t.key);
+                let mut dec = aesni::AesNi128Decryptor::new(t.key);
                 run_test(&mut enc, &mut dec, t);
             }
         }
@@ -539,11 +537,11 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn testAesNi192() {
-        if supports_aesni() {
+        if util::supports_aesni() {
             let tests = tests192();
             for t in tests.iter() {
-                let mut enc = AesNi192Encryptor::new(t.key);
-                let mut dec = AesNi192Decryptor::new(t.key);
+                let mut enc = aesni::AesNi192Encryptor::new(t.key);
+                let mut dec = aesni::AesNi192Decryptor::new(t.key);
                 run_test(&mut enc, &mut dec, t);
             }
         }
@@ -553,11 +551,11 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn testAesNi256() {
-        if supports_aesni() {
+        if util::supports_aesni() {
             let tests = tests256();
             for t in tests.iter() {
-                let mut enc = AesNi256Encryptor::new(t.key);
-                let mut dec = AesNi256Decryptor::new(t.key);
+                let mut enc = aesni::AesNi256Encryptor::new(t.key);
+                let mut dec = aesni::AesNi256Decryptor::new(t.key);
                 run_test(&mut enc, &mut dec, t);
             }
         }
@@ -643,42 +641,13 @@ mod test {
     }
 
     #[test]
-    fn test_ctr() {
-        use buffer::{RefReadBuffer, RefWriteBuffer};
-
-        use aes::KeySize128;
-        let mut enc = ctr(KeySize128, [0u8, ..16], [0u8, ..16]);
-
-        let tin = [0u8, ..4];
-        let mut tout = [0u8, ..4];
-
-        {
-            let mut rin = RefReadBuffer::new(tin);
-            let mut rout = RefWriteBuffer::new(tout);
-            enc.encrypt(&mut rin, &mut rout, true);
-        }
-        {
-            enc.process(tin, tout);
-        }
+    fn testAesSafe192_x8() {
+        fail!();
     }
 
     #[test]
-    fn test_cbc() {
-        use aes::cbc_encryptor;
-        use blockmodes::PkcsPadding;
-        use buffer::{RefReadBuffer, RefWriteBuffer};
-
-        use aes::KeySize128;
-        let mut enc = cbc_encryptor(KeySize128, [0u8, ..16], [0u8, ..16], PkcsPadding);
-
-        let tin = [0u8, ..4];
-        let mut tout = [0u8, ..4];
-
-        {
-            let mut rin = RefReadBuffer::new(tin);
-            let mut rout = RefWriteBuffer::new(tout);
-            enc.encrypt(&mut rin, &mut rout, true);
-        }
+    fn testAesSafe256_x8() {
+        fail!();
     }
 }
 
@@ -686,18 +655,38 @@ mod test {
 mod bench {
     use extra::test::BenchHarness;
 
+    #[cfg(target_arch = "x86")]
+    #[cfg(target_arch = "x86_64")]
+    use aesni;
+
     use aessafe;
-    use symmetriccipher::*;
+    use symmetriccipher::{BlockEncryptor, BlockEncryptorX8};
+    use util;
+
+    #[cfg(target_arch = "x86")]
+    #[cfg(target_arch = "x86_64")]
+    #[bench]
+    pub fn aesni_bench(bh: &mut BenchHarness) {
+        if util::supports_aesni() {
+            let key: [u8, ..16] = [1u8, ..16];
+            let plain: [u8, ..16] = [2u8, ..16];
+
+            let a = aesni::AesNi128Encryptor::new(key);
+
+            let mut tmp = [0u8, ..16];
+
+            bh.iter( || {
+                a.encrypt_block(plain, tmp);
+            });
+
+            bh.bytes = (plain.len()) as u64;
+        }
+    }
 
     #[bench]
-    pub fn aes_bench(bh: &mut BenchHarness) {
+    pub fn aes_safe_bench(bh: &mut BenchHarness) {
         let key: [u8, ..16] = [1u8, ..16];
         let plain: [u8, ..16] = [2u8, ..16];
-
-        // Dangerous - 158 MB/s
-        // Safe (orig) - 5 MB/s
-        // Safe (S-boxes bitspliced only; not working): 6 MB/s
-        // Safe (bs) - 10 MB/s!
 
         let a = aessafe::AesSafe128Encryptor::new(key);
 
@@ -711,7 +700,7 @@ mod bench {
     }
 
     #[bench]
-    pub fn aes_bench_x8(bh: &mut BenchHarness) {
+    pub fn aes_safe_x8_bench(bh: &mut BenchHarness) {
         let key: [u8, ..16] = [1u8, ..16];
         let plain: [u8, ..128] = [2u8, ..128];
 

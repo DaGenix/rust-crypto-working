@@ -17,6 +17,7 @@ pub trait ReadBuffer {
     fn is_full(&self) -> bool;
     fn remaining(&self) -> uint;
     fn capacity(&self) -> uint;
+    fn position(&self) -> uint { self.capacity() - self.remaining() }
 
     fn rewind(&mut self, distance: uint);
     fn truncate(&mut self, amount: uint);
@@ -44,6 +45,7 @@ pub trait WriteBuffer {
     fn is_full(&self) -> bool;
     fn remaining(&self) -> uint;
     fn capacity(&self) -> uint;
+    fn position(&self) -> uint { self.capacity() - self.remaining() }
 
     fn rewind(&mut self, distance: uint);
     fn reset(&mut self);

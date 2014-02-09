@@ -41,7 +41,7 @@ fn expand_key<D: Digest>(digest: &mut D, key: &[u8]) -> ~[u8] {
             *elem = 0;
         }
     } else {
-        let output_size = digest.output_bytes();
+        let output_size = digest.digest_output_bytes();
         digest.input(key);
         digest.result(expanded_key.mut_slice_to(output_size));
         digest.reset();

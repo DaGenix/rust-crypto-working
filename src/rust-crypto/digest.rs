@@ -53,6 +53,13 @@ pub trait Digest {
     }
 
     /**
+     * TODO: Remove this once method resolution is made more precise in Rust.
+     * The only purpose of this method is to work around cases where Mac::output_size()
+     * and Digest::output_size() are ambiguous.
+     */
+    fn digest_output_bytes(&self) -> uint { self.output_bytes() }
+
+    /**
      * Get the block size in bytes.
      */
     fn block_size(&self) -> uint;

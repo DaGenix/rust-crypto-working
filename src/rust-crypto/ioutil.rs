@@ -8,18 +8,21 @@ use mac::Mac;
 
 use std::io::IoResult;
 
-// TODO - Have this take the writer to wrap by value!
 pub struct MacWriter<'a, W, M> {
-    priv writer: &'a mut W,
+    priv writer: W,
     priv mac: M
 }
 
 impl <'a, W: Writer, M: Mac> MacWriter<'a, W, M> {
-    pub fn new(writer: &'a mut W, mac: M) -> MacWriter<'a, W, M> {
+    pub fn new(writer: W, mac: M) -> MacWriter<'a, W, M> {
         MacWriter {
             writer: writer,
             mac: mac
         }
+    }
+    pub fn unwrap(self) -> (W, M) {
+        let MacWriter {writer, mac} = self;
+        (writer, mac)
     }
 }
 
@@ -30,18 +33,21 @@ impl <'a, W: Writer, M: Mac> Writer for MacWriter<'a, W, M> {
     }
 }
 
-// TODO - Have this take the reader to wrap by value!
 pub struct MacReader<'a, R, M> {
-    priv reader: &'a mut R,
+    priv reader: R,
     priv mac: M
 }
 
 impl <'a, R: Reader, M: Mac> MacReader<'a, R, M> {
-    pub fn new(reader: &'a mut R, mac: M) -> MacReader<'a, R, M> {
+    pub fn new(reader: R, mac: M) -> MacReader<'a, R, M> {
         MacReader {
             reader: reader,
             mac: mac
         }
+    }
+    pub fn unwrap(self) -> (R, M) {
+        let MacReader {reader, mac} = self;
+        (reader, mac)
     }
 }
 

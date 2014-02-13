@@ -31,6 +31,7 @@
 #[feature(macro_rules)];
 
 extern mod crypto = "rust-crypto";
+extern mod getopts;
 extern mod extra;
 
 use crypto::aes;
@@ -46,11 +47,12 @@ use crypto::scrypt::ScryptParams;
 use crypto::sha2::Sha256;
 use crypto::symmetriccipher::{Decryptor, Encryptor};
 
-use extra::getopts;
+// use getopts;
 
 use std::io;
 use std::io::{BufferedReader, BufReader, EndOfFile, File, IoError, IoResult};
 use std::io::fs;
+use std::mem;
 use std::os;
 use std::rand::{OSRng, Rng};
 use std::str;
@@ -346,7 +348,7 @@ fn do_decrypt<R: Reader, W: Writer, M: Mac>(
             // Not EOF - Process buff_in_1
             mac.input(buff_in_1.as_slice());
             if_ok!(decrypt_full_input(buff_in_1.as_slice(), false));
-            std::util::swap(&mut buff_in_1, &mut buff_in_2);
+            mem::swap(&mut buff_in_1, &mut buff_in_2);
         } else {
             if cnt < 32 {
                 // The Mac is either fully in buff_in_1, right up to the end, or split across the
@@ -464,12 +466,12 @@ fn decrypt<R: Reader, W: Writer>(
     let mut header2_reader = BufReader::new(header2);
 
     // Read a length-prefixed field
-    let read_field = || -> IoResult<~[u8]> {
-        let field_len = if_ok!(header2_reader.read_be_u32()) as uint;
-        header2_reader.read_bytes(field_len)
+    fn read_field<R: Reader>(reader: &mut R) -> IoResult<~[u8]> {
+        let field_len = if_ok!(reader.read_be_u32()) as uint;
+        reader.read_bytes(field_len)
     };
 
-    let algo_name = match str::from_utf8_owned(io!(read_field())) {
+    let algo_name = match str::from_utf8_owned(io!(read_field(&mut header2_reader))) {
         Some(s) => s,
         None => return Err(~"Invalid algorithm name - not valid utf-8")
     };
@@ -480,9 +482,9 @@ fn decrypt<R: Reader, W: Writer>(
 
     let scrypt_params = ScryptParams::new(scrypt_log_n, scrypt_r, scrypt_p);
 
-    let enc_salt = io!(read_field());
-    let mac_salt = io!(read_field());
-    let iv = io!(read_field());
+    let enc_salt = io!(read_field(&mut header2_reader));
+    let mac_salt = io!(read_field(&mut header2_reader));
+    let iv = io!(read_field(&mut header2_reader));
 
     // Its possible that there are more header fields, but we can ignore them. If for some reason we
     // can't ignore them, then the VERSION field in the header should have been incremented.
@@ -513,12 +515,12 @@ fn main() {
     let args = os::args();
 
     let opts = ~[
-        getopts::groups::optflag("h", "help", "Display help"),
-        getopts::groups::optopt("f", "file", "Input file", ""),
-        getopts::groups::optopt("o", "out", "Output file", ""),
-        getopts::groups::optflag("e", "encrypt", "Encrypt (Default)"),
-        getopts::groups::optflag("d", "decrypt", "Decrypt"),
-        getopts::groups::optopt(
+        getopts::optflag("h", "help", "Display help"),
+        getopts::optopt("f", "file", "Input file", ""),
+        getopts::optopt("o", "out", "Output file", ""),
+        getopts::optflag("e", "encrypt", "Encrypt (Default)"),
+        getopts::optflag("d", "decrypt", "Decrypt"),
+        getopts::optopt(
             "a",
             "algorithm",
             "Algorithm to use (Default: AES/128/CBC/PkcsPadding). Only valid for encryption.",
@@ -526,10 +528,10 @@ fn main() {
     ];
 
     let print_usage = || {
-        println!("{}", getopts::groups::usage("A simple encryption utility.", opts));
+        println!("{}", getopts::usage("A simple encryption utility.", opts));
     };
 
-    let matches = match getopts::groups::getopts(args.tail(), opts) {
+    let matches = match getopts::getopts(args.tail(), opts) {
         Ok(m) => m,
         Err(f) => {
             println!("{}", f.to_err_msg());

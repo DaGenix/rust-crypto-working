@@ -25,6 +25,7 @@ pub mod aessafe;
 pub mod bcrypt;
 pub mod bcrypt_pbkdf;
 pub mod blake2b;
+pub mod bignum;
 pub mod blockmodes;
 pub mod blowfish;
 pub mod buffer;

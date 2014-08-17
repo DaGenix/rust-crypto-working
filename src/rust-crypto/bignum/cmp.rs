@@ -7,33 +7,33 @@
 use super::{Bignum, Digit};
 
 /// Signed comparison
-pub fn cmp(x: &Bignum, y: &Bignum) -> int {
-    if (!x.positive && y.positive) {
+pub fn cmp(a: &Bignum, b: &Bignum) -> int {
+    if (!a.positive && b.positive) {
         return -1;
-    } else if (x.positive && y.positive) {
+    } else if (a.positive && b.positive) {
         return 1;
     } else {
         // compare digits
-        if (!x.positive) {
+        if (!a.positive) {
             // if negative compare opposite direction
-            return cmp_mag(y, x);
+            return cmp_mag(b, a);
         } else {
-            return cmp_mag(x, y);
+            return cmp_mag(a, b);
         }
     }
 }
 
 /// Unsigned comparison
-pub fn cmp_mag(x: &Bignum, y: &Bignum) -> int {
-    if (x.dp.len() > y.dp.len()) {
+pub fn cmp_mag(a: &Bignum, b: &Bignum) -> int {
+    if (a.dp.len() > b.dp.len()) {
         return 1;
-    } else if (x.dp.len() < y.dp.len()) {
+    } else if (a.dp.len() < b.dp.len()) {
         return -1;
     } else {
-        for (&tmpx, &tmpy) in x.dp.iter().rev().zip(y.dp.iter().rev()) {
-            if tmpx > tmpy {
+        for (&tmpa, &tmpb) in a.dp.iter().rev().zip(b.dp.iter().rev()) {
+            if tmpa > tmpb {
                 return 1
-            } else if tmpx < tmpy {
+            } else if tmpa < tmpb {
                 return -1
             }
         }

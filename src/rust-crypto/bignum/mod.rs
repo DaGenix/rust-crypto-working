@@ -9,6 +9,7 @@ mod cmp;
 mod mul;
 mod div;
 mod exp;
+mod ops;
 
 pub type Digit = u32;
 pub type Word = u64;
@@ -21,7 +22,7 @@ pub struct Bignum {
 }
 
 impl Bignum {
-    pub fn zero() -> Bignum {
+    pub fn new() -> Bignum {
         Bignum {
             dp: Vec::new(),
             positive: true
@@ -30,11 +31,14 @@ impl Bignum {
 }
 
 impl Bignum {
-    pub fn set_add(&mut self, x: &Bignum, y: &Bignum) {
-        addsub::add(self, x, y);
+    pub fn set_add(&mut self, a: &Bignum, b: &Bignum) {
+        addsub::add(self, a, b);
     }
-    pub fn set_sub(&mut self, x: &Bignum, y: &Bignum) {
-        addsub::sub(self, x, y);
+    pub fn set_sub(&mut self, a: &Bignum, b: &Bignum) {
+        addsub::sub(self, a, b);
+    }
+    pub fn set_mul(&mut self, a: &Bignum, b: &Bignum) {
+        mul::mul(self, a, b);
     }
 }
 

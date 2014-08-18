@@ -17,6 +17,7 @@ extern crate rand;
 extern crate "rustc-serialize" as serialize;
 extern crate time;
 #[cfg(test)] extern crate test;
+extern crate num;
 
 pub mod aead;
 pub mod aes;

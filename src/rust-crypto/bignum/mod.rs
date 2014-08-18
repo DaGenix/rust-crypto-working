@@ -4,11 +4,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+pub use self::div::div_rem;
+
 mod addsub;
 mod cmp;
 mod mul;
 mod div;
 mod exp;
+mod radix;
 mod ops;
 
 pub type Digit = u32;
@@ -16,6 +19,7 @@ pub type Word = u64;
 
 pub static DIGIT_BITS: uint = 32;
 
+#[deriving(Clone)]
 pub struct Bignum {
     pub dp: Vec<Digit>,
     pub positive: bool
@@ -28,9 +32,36 @@ impl Bignum {
             positive: true
         }
     }
+    pub fn new_d(a: Digit) -> Bignum {
+        let mut x = Bignum::new();
+        x.dp.push(a);
+        x
+    }
+    pub fn new_from_str(v: &str) -> Result<Bignum, &'static str> {
+        let mut x = Bignum::new();
+        if radix::read_str(&mut x, v) {
+            Ok(x)
+        } else {
+            Err("Invalid string")
+        }
+    }
 }
 
 impl Bignum {
+    pub fn is_zero(&self) -> bool {
+        self.dp.len() == 0
+    }
+    pub fn set_d(&mut self, a: Digit) {
+        self.dp.clear();
+        self.dp.push(a);
+        self.positive == a >= 0;
+    }
+}
+
+impl Bignum {
+    pub fn to_string(&self) -> String {
+        radix::to_str(self)
+    }
     pub fn set_add(&mut self, a: &Bignum, b: &Bignum) {
         addsub::add(self, a, b);
     }
@@ -39,6 +70,9 @@ impl Bignum {
     }
     pub fn set_mul(&mut self, a: &Bignum, b: &Bignum) {
         mul::mul(self, a, b);
+    }
+    pub fn set_div(&mut self, a: &Bignum, b: &Bignum) {
+        div::div_rem(Some(self), None, a, b);
     }
 }
 

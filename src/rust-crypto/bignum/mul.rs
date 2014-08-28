@@ -12,7 +12,7 @@ use super::ops;
 use std::cmp;
 
 pub fn mul(out: &mut Bignum, a: &Bignum, b: &Bignum) {
-    let mut c0: Digit = 0;
+    let mut c0;
     let mut c1: Digit = 0;
     let mut c2: Digit = 0;
 
@@ -43,7 +43,7 @@ pub fn mul(out: &mut Bignum, a: &Bignum, b: &Bignum) {
                 c1 = _c1;
                 c2 = _c2;
                 tmpx = tmpx.offset(1);
-                tmpy = tmpy.offset(1);
+                tmpy = tmpy.offset(-1);
             }
         }
 

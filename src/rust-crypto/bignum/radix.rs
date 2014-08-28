@@ -11,7 +11,6 @@ use super::Digit;
 
 pub fn read_str(out: &mut Bignum, v: &str) -> bool {
     out.dp.clear();
-
     let mut it = v.chars().peekable();
 
     let positive = if it.peek() == Some(&'-') {
@@ -32,8 +31,7 @@ pub fn read_str(out: &mut Bignum, v: &str) -> bool {
         let d = ((c as Digit) - ('0' as Digit));
 
         tmp1.set_mul(out, &base10);
-        tmp2.set_d(d);
-        out.set_add(&tmp1, &tmp2);
+        tmp2.set_d(d); out.set_add(&tmp1, &tmp2);
     }
 
     if !out.is_zero() {
@@ -82,12 +80,12 @@ int fp_toradix(fp_int *a, char *str, int radix)
   fp_digit d;
   char   *_s = str;
 
-  /* check range of the radix */
+  // check range of the radix
   if (radix < 2 || radix > 64) {
     return FP_VAL;
   }
 
-  /* quick out if its zero */
+  // quick out if its zero
   if (fp_iszero(a) == 1) {
      *str++ = '0';
      *str = '\0';
@@ -96,7 +94,7 @@ int fp_toradix(fp_int *a, char *str, int radix)
 
   fp_init_copy(&t, a);
 
-  /* if it is negative output a - */
+  // if it is negative output a -
   if (t.sign == FP_NEG) {
     ++_s;
     *str++ = '-';
@@ -110,12 +108,11 @@ int fp_toradix(fp_int *a, char *str, int radix)
     ++digs;
   }
 
-  /* reverse the digits of the string.  In this case _s points
-   * to the first digit [exluding the sign] of the number]
-   */
+  // reverse the digits of the string.  In this case _s points
+  // to the first digit [exluding the sign] of the number]
   fp_reverse ((unsigned char *)_s, digs);
 
-  /* append a NULL so the string is properly terminated */
+  // append a NULL so the string is properly terminated
   *str = '\0';
   return FP_OKAY;
 }

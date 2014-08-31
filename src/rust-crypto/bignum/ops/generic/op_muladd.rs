@@ -7,7 +7,7 @@
 use super::super::{Digit, Word};
 use super::super::DIGIT_BITS;
 
-#[inline]
+#[inline(always)]
 pub fn op_muladd(i: Digit, j: Digit, mut c0: Digit, mut c1: Digit, mut c2: Digit)
         -> (Digit, Digit, Digit) {
     let mut t: Word;

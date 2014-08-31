@@ -5,33 +5,50 @@
 // except according to those terms.
 
 use std::mem;
+use std::u32;
+use std::io;
+use std::string;
 
 use super::Bignum;
 use super::Digit;
+use super::Word;
+
+// 10^0 ... 10^20
+static base10powers: [u64, ..20] = [
+    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000,
+    100000000000, 1000000000000, 10000000000000, 100000000000000, 1000000000000000,
+    10000000000000000, 100000000000000000, 1000000000000000000, 10000000000000000000 ];
 
 pub fn read_str(out: &mut Bignum, v: &str) -> bool {
     out.dp.clear();
-    let mut it = v.chars().peekable();
 
-    let positive = if it.peek() == Some(&'-') {
-        it.next();
-        false
+    if v.len() == 0 {
+        return false;
+    }
+
+    let positive: bool;
+    let mut it = if v.chars().next() == Some('-') {
+        positive = false;
+        v.as_bytes().slice_from(1).chunks(9)
     } else {
-        true
+        positive = true;
+        v.as_bytes().chunks(9)
     };
 
     let mut tmp1 = Bignum::new();
     let mut tmp2 = Bignum::new();
-    let base10 = Bignum::new_d(10);
+    let mut base = Bignum::new();
 
     for c in it {
-        if c < '0' || c > '9' {
-            return false;
+        match u32::parse_bytes(c, 10) {
+            Some(d) => {
+                base.set_d(base10powers[c.len()] as Digit);
+                tmp1.set_mul(out, &base);
+                tmp2.set_d(d as Digit);
+                out.set_add(&tmp1, &tmp2);
+            }
+            None => { return false; }
         }
-        let d = ((c as Digit) - ('0' as Digit));
-
-        tmp1.set_mul(out, &base10);
-        tmp2.set_d(d); out.set_add(&tmp1, &tmp2);
     }
 
     if !out.is_zero() {
@@ -41,10 +58,11 @@ pub fn read_str(out: &mut Bignum, v: &str) -> bool {
 }
 
 pub fn to_str(v: &Bignum) -> String {
-    let mut out = String::new();
+//     let mut out = String::new();
     if v.is_zero() {
-        out.push_char('0');
-        return out;
+        return String::from_str("0");
+//         out.push_char('0');
+//         return out;
     }
 
     let positive = v.positive;
@@ -52,24 +70,34 @@ pub fn to_str(v: &Bignum) -> String {
     let mut v = v.clone();
     let mut q = Bignum::new();
     let mut r = Bignum::new();
-    let base10 = Bignum::new_d(10);
+    let base10 = Bignum::new_d(100000000);
+
+    let mut w = io::MemWriter::new();
 
     while !v.is_zero() {
         super::div_rem(Some(&mut q), Some(&mut r), &v, &base10);
         let d = if r.is_zero() { 0 } else { r.dp[0] };
-        out.push_char((('0' as uint) + (d as uint)) as u8 as char);
+        write!(&mut w as &mut io::Writer, "{}", d);
+
+//         out.push_char((('0' as uint) + (d as uint)) as u8 as char);
         mem::swap(&mut v, &mut q);
     }
 
     if !positive {
-        out.push_char('-');
+        w.write(['-' as u8].as_slice());
     }
 
+    let mut raw = w.unwrap();
+    raw.reverse();
+    for c in raw.as_mut_slice().mut_chunks(8) {
+        c.reverse();
+    }
     unsafe {
-        out.as_mut_bytes().reverse();
+//         out.as_mut_bytes().reverse();
+        string::raw::from_utf8(raw)
     }
 
-    out
+//     out
 }
 
 /*

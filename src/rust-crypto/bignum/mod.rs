@@ -76,6 +76,16 @@ impl Bignum {
     }
 }
 
+/*
+impl FromStrRadix for BigInt {
+    /// Creates and initializes a BigInt.
+    #[inline]
+    fn from_str_radix(s: &str, radix: uint) -> Option<BigInt> {
+        BigInt::parse_bytes(s.as_bytes(), radix)
+    }
+}
+*/
+
 pub fn clamp(x: &mut Bignum) {
     while x.dp.last().map_or(false, |&tmp| tmp == 0) {
         x.dp.pop();

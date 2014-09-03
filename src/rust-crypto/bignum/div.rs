@@ -10,7 +10,51 @@ use std::num::{Zero, One};
 
 use super::Bignum;
 use super::DIGIT_BITS;
+use super::cmp;
 
+pub fn div_rem(
+        quotient: Option<&mut Bignum>,
+        remainder: Option<&mut Bignum>,
+        a: &Bignum,
+        b: &Bignum) {
+    if b.is_zero() {
+        fail!("Division by 0");
+    }
+
+    // If a < b, quotient = 0, remainder = a
+    if cmp::cmp(&a, &b) < 0 {
+        match quotient {
+            Some(x) => { x.set_d(0); }
+            _ => { }
+        }
+        match remainder {
+            Some(x) => { x.set(a); }
+            _ => { }
+        }
+        return;
+    }
+
+    let mut q = BigInt::new();
+    q.dp.grow(a.dp.len() + 2, 0);
+
+    let mut x = BigInt::new();
+    x.set(a);
+    let mut y = BigInt::new();
+    y.set(b);
+
+    let mut t1 = BigInt::new();
+    let mut t2 = BigInt::new();
+
+    // fix the sign
+    let positive = a.positive == b.positive;
+    x.positive = true;
+    y.positive = true;
+
+    // normalize both x and y, ensure that y >= b/2, [b == 2**DIGIT_BITS]
+    let norm =
+}
+
+/*
 fn from_bignum(x: &Bignum) -> BigInt {
     let mut out: BigInt = Zero::zero();
     for &d in x.dp.iter().rev() {
@@ -66,3 +110,5 @@ pub fn div_rem(
         None => { }
     }
 }
+*/
+

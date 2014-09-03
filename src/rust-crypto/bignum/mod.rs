@@ -7,6 +7,7 @@
 pub use self::div::div_rem;
 
 mod addsub;
+mod bits;
 mod cmp;
 mod mul;
 mod div;
@@ -56,11 +57,19 @@ impl Bignum {
         self.dp.push(a);
         self.positive == a >= 0;
     }
+    pub fn set(&mut self, a: &BigInt) {
+        self.dp.clear();
+        self.dp.push_all(a.dp.as_slice());
+        self.positive = a.positive;
+    }
 }
 
 impl Bignum {
     pub fn to_string(&self) -> String {
         radix::to_str(self)
+    }
+    pub fn count_bits(&self) -> uint {
+        bits::count_bits(self)
     }
     pub fn set_add(&mut self, a: &Bignum, b: &Bignum) {
         addsub::add(self, a, b);

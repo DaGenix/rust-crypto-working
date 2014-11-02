@@ -34,3 +34,6 @@ tools/rust-crypto-tester/target/
 # cargo
 Cargo.lock
 target/
+
+# Kate files
+.kateproject

@@ -4,6 +4,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*
+
 use num::bigint::BigInt;
 use num::Integer;
 use std::num::{Zero, One};
@@ -18,7 +20,7 @@ pub fn div_rem(
         a: &Bignum,
         b: &Bignum) {
     if b.is_zero() {
-        fail!("Division by 0");
+        panic!("Division by 0");
     }
 
     // If a < b, quotient = 0, remainder = a
@@ -51,8 +53,9 @@ pub fn div_rem(
     y.positive = true;
 
     // normalize both x and y, ensure that y >= b/2, [b == 2**DIGIT_BITS]
-    let norm =
+//    let norm =
 }
+*/
 
 /*
 fn from_bignum(x: &Bignum) -> BigInt {

@@ -4,14 +4,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::BigInt;
+use super::Bignum;
 use super::DIGIT_BITS;
+use std::num::Int;
 
-pub fn count_bits(a: &BigInt) -> uint {
+pub fn count_bits(a: &Bignum) -> uint {
     if a.is_zero() {
         return 0;
     }
-    let mut bits = (a.len() - 1) * DIGIT_BITS;
-    bits += DIGIT_BITS - a.dp[a.len() - 1].leading_zeros();
+    let mut bits = (a.dp.len() - 1) * DIGIT_BITS;
+    bits += DIGIT_BITS - (a.dp[a.dp.len() - 1].leading_zeros());
     return bits;
 }

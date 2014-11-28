@@ -23,7 +23,7 @@ pub fn mul(out: &mut Bignum, a: &Bignum, b: &Bignum) {
     // unsafe { out.dp.set_len(result_used); }
 
     out.dp.clear();
-    out.dp.grow(result_used, &0);
+    out.dp.grow(result_used, 0);
 
     for ix in range(0, result_used) {
         let ty = cmp::min(ix, b.dp.len() - 1);

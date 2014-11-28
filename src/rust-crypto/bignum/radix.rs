@@ -4,10 +4,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*
+
 use std::mem;
 use std::u32;
 use std::io;
 use std::string;
+use std::num;
 
 use super::Bignum;
 use super::Digit;
@@ -40,7 +43,8 @@ pub fn read_str(out: &mut Bignum, v: &str) -> bool {
     let mut base = Bignum::new();
 
     for c in it {
-        match u32::parse_bytes(c, 10) {
+//        match u32::parse_bytes(c, 10) {
+        match num::FromStrRadix::from_str_radix(c, 10) {
             Some(d) => {
                 base.set_d(base10powers[c.len()] as Digit);
                 tmp1.set_mul(out, &base);
@@ -99,6 +103,7 @@ pub fn to_str(v: &Bignum) -> String {
 
 //     out
 }
+*/
 
 /*
 int fp_toradix(fp_int *a, char *str, int radix)

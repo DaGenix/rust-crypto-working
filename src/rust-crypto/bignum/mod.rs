@@ -4,15 +4,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub use self::div::div_rem;
+// pub use self::div::div_rem;
 
 mod addsub;
 mod bits;
 mod cmp;
 mod mul;
-mod div;
+// mod div;
 mod exp;
-mod radix;
+// mod radix;
 mod ops;
 
 pub type Digit = u32;
@@ -38,7 +38,7 @@ impl Bignum {
         x.dp.push(a);
         x
     }
-    pub fn new_from_str(v: &str) -> Result<Bignum, &'static str> {
+/*    pub fn new_from_str(v: &str) -> Result<Bignum, &'static str> {
         let mut x = Bignum::new();
         if radix::read_str(&mut x, v) {
             Ok(x)
@@ -46,6 +46,7 @@ impl Bignum {
             Err("Invalid string")
         }
     }
+*/
 }
 
 impl Bignum {
@@ -57,7 +58,7 @@ impl Bignum {
         self.dp.push(a);
         self.positive == a >= 0;
     }
-    pub fn set(&mut self, a: &BigInt) {
+    pub fn set(&mut self, a: &Bignum) {
         self.dp.clear();
         self.dp.push_all(a.dp.as_slice());
         self.positive = a.positive;
@@ -65,9 +66,9 @@ impl Bignum {
 }
 
 impl Bignum {
-    pub fn to_string(&self) -> String {
-        radix::to_str(self)
-    }
+//    pub fn to_string(&self) -> String {
+//        radix::to_str(self)
+//    }
     pub fn count_bits(&self) -> uint {
         bits::count_bits(self)
     }
@@ -81,7 +82,7 @@ impl Bignum {
         mul::mul(self, a, b);
     }
     pub fn set_div(&mut self, a: &Bignum, b: &Bignum) {
-        div::div_rem(Some(self), None, a, b);
+        // div::div_rem(Some(self), None, a, b);
     }
 }
 

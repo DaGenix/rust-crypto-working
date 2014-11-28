@@ -19,3 +19,4 @@ opt-level = 2
 time = "*"
 rand = "*"
 rustc-serialize = "*"
+num = "*"

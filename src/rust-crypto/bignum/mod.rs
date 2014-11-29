@@ -4,103 +4,336 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// pub use self::div::div_rem;
+use std::mem;
+use std::num::Int;
 
-mod addsub;
-mod bits;
-mod cmp;
-mod mul;
-// mod div;
-mod exp;
-// mod radix;
-mod ops;
-
-pub type Digit = u32;
-pub type Word = u64;
-
-pub static DIGIT_BITS: uint = 32;
-
-#[deriving(Clone)]
-pub struct Bignum {
-    pub dp: Vec<Digit>,
-    pub positive: bool
+pub trait Digit<W>: Int {
+    fn as_word(self) -> W;
+    fn bits() -> uint;
 }
 
-impl Bignum {
-    pub fn new() -> Bignum {
-        Bignum {
-            dp: Vec::new(),
-            positive: true
-        }
-    }
-    pub fn new_d(a: Digit) -> Bignum {
-        let mut x = Bignum::new();
-        x.dp.push(a);
-        x
-    }
-/*    pub fn new_from_str(v: &str) -> Result<Bignum, &'static str> {
-        let mut x = Bignum::new();
-        if radix::read_str(&mut x, v) {
-            Ok(x)
-        } else {
-            Err("Invalid string")
-        }
-    }
-*/
-}
-
-impl Bignum {
-    pub fn is_zero(&self) -> bool {
-        self.dp.len() == 0
-    }
-    pub fn set_d(&mut self, a: Digit) {
-        self.dp.clear();
-        self.dp.push(a);
-        self.positive == a >= 0;
-    }
-    pub fn set(&mut self, a: &Bignum) {
-        self.dp.clear();
-        self.dp.push_all(a.dp.as_slice());
-        self.positive = a.positive;
-    }
-}
-
-impl Bignum {
-//    pub fn to_string(&self) -> String {
-//        radix::to_str(self)
-//    }
-    pub fn count_bits(&self) -> uint {
-        bits::count_bits(self)
-    }
-    pub fn set_add(&mut self, a: &Bignum, b: &Bignum) {
-        addsub::add(self, a, b);
-    }
-    pub fn set_sub(&mut self, a: &Bignum, b: &Bignum) {
-        addsub::sub(self, a, b);
-    }
-    pub fn set_mul(&mut self, a: &Bignum, b: &Bignum) {
-        mul::mul(self, a, b);
-    }
-    pub fn set_div(&mut self, a: &Bignum, b: &Bignum) {
-        // div::div_rem(Some(self), None, a, b);
-    }
+pub trait Word<D>: Int {
+    fn as_digit(self) -> D;
 }
 
 /*
-impl FromStrRadix for BigInt {
-    /// Creates and initializes a BigInt.
-    #[inline]
-    fn from_str_radix(s: &str, radix: uint) -> Option<BigInt> {
-        BigInt::parse_bytes(s.as_bytes(), radix)
-    }
+impl Digit<u64> for u32 {
+    fn as_word(self) -> u64 { self as u64 }
+    fn bits() -> uint { 32 }
 }
 */
 
-pub fn clamp(x: &mut Bignum) {
-    while x.dp.last().map_or(false, |&tmp| tmp == 0) {
-        x.dp.pop();
+impl Digit<u32> for u16 {
+    fn as_word(self) -> u32 { self as u32 }
+    fn bits() -> uint { 16 }
+}
+
+/*
+impl Word<u32> for u64 {
+    fn as_digit(self) -> u32 { self as u32 }
+}
+*/
+
+impl Word<u16> for u32 {
+    fn as_digit(self) -> u16 { self as u16 }
+}
+
+pub trait Data<T>: Index<uint, T> + IndexMut<uint, T> + Slice<uint, [T]> + SliceMut<uint, [T]> {
+    fn new() -> Self;
+    fn len(&self) -> uint;
+    fn clear(&mut self);
+    unsafe fn grow_uninit(&mut self, additional: uint);
+    fn pop(&mut self);
+
+    fn push(&mut self, val: T) {
+        let old_len = self.len();
+        unsafe {
+            self.grow_uninit(1);
+            self[old_len] = val;
+        }
     }
-    if x.dp.is_empty() {
-        x.positive = true;
+
+    fn is_empty(&self) -> bool { self.len() == 0}
+}
+
+#[macro_export]
+macro_rules! bignum_data(
+    ($name:ident, $ty:ty, $size:expr) => {
+        pub struct $name {
+            len: uint,
+            data: [$ty, ..$size]
+        }
+
+        impl Index<uint, $ty> for $name {
+            fn index(&self, index: &uint) -> &$ty { &self.data[*index] }
+        }
+
+        impl IndexMut<uint, $ty> for $name {
+            fn index_mut(&mut self, index: &uint) -> &mut $ty { &mut self.data[*index] }
+        }
+
+        impl Slice<uint, [$ty]> for $name {
+            fn as_slice_(&self) -> &[$ty] { self.data[..self.len()] }
+            fn slice_from_or_fail(&self, start: &uint) -> &[$ty] { self.data[*start..self.len()] }
+            fn slice_to_or_fail(&self, end: &uint) -> &[$ty] {
+                if *end > self.len() {
+                    panic!("Out of bounds");
+                }
+                self.data[..*end]
+            }
+            fn slice_or_fail(&self, start: &uint, end: &uint) -> &[$ty] {
+                if *end > self.len() {
+                    panic!("Out of bounds");
+                }
+                self.data[*start..*end]
+            }
+        }
+
+        impl SliceMut<uint, [$ty]> for $name {
+            fn as_mut_slice_(&mut self) -> &mut [$ty] {
+                let l = self.len();
+                self.data[mut ..l]
+            }
+            fn slice_from_or_fail_mut(&mut self, start: &uint) -> &mut [$ty] {
+                let l = self.len();
+                self.data[mut *start..l]
+            }
+            fn slice_to_or_fail_mut(&mut self, end: &uint) -> &mut [$ty] {
+                if *end > self.len() {
+                    panic!("Out of bounds");
+                }
+                self.data[mut ..*end]
+            }
+            fn slice_or_fail_mut(&mut self, start: &uint, end: &uint) -> &mut [$ty] {
+                if *end > self.len() {
+                    panic!("Out of bounds");
+                }
+                self.data[mut *start..*end]
+            }
+        }
+
+        impl Data<$ty> for $name {
+            fn new() -> $name {
+                $name {
+                    len: 0,
+                    data: unsafe { mem::uninitialized() }
+                }
+            }
+
+            fn len(&self) -> uint { self.len }
+
+            // fn capacity(&self) -> uint { $size }
+
+            fn clear(&mut self) {
+                self.len = 0;
+            }
+
+            fn pop(&mut self) {
+                if self.len == 0 {
+                    panic!("Can't pop empty data");
+                }
+                self.len -= 1;
+            }
+
+            unsafe fn grow_uninit(&mut self, additional: uint) {
+                if self.len + additional > $size {
+                    panic!("Size too big");
+                }
+                self.len += additional;
+            }
+        }
     }
+)
+
+bignum_data!(DataU16x100, u16, 100)
+
+
+pub struct Bignum<T> {
+    pub pos: bool,
+    pub data: T
+}
+
+impl <D, W, M> Bignum<M>
+        where D: Digit<W>, W: Word<D>, M: Data<D> {
+
+    pub fn new() -> Bignum<M> {
+        Bignum {
+            pos: true,
+            data: Data::new()
+        }
+    }
+}
+
+pub fn clamp<D, W, M>(x: &mut Bignum<M>)
+        where D: Digit<W>, W: Word<D>, M: Data<D> {
+    while x.data[].last().map_or(false, |&tmp| tmp == Int::zero()) {
+        x.data.pop();
+    }
+    if x.data.is_empty() {
+        x.pos = true;
+    }
+}
+
+
+pub trait Ops<M> {
+    fn unsigned_add(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
+    fn unsigned_sub(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
+}
+
+pub struct GenericOps;
+
+struct ZipWithDefault <T, A, B> {
+    def: T,
+    a: A,
+    b: B
+}
+
+fn zip_with_default<T: Copy, A: Iterator<T>, B: Iterator<T>>(def: T, a: A, b: B)
+        -> ZipWithDefault<T, A, B> {
+    ZipWithDefault {
+        def: def,
+        a: a,
+        b: b
+    }
+}
+
+impl <T: Copy, A: Iterator<T>, B: Iterator<T>> Iterator<(T, T)> for ZipWithDefault<T, A, B> {
+    fn next(&mut self) -> Option<(T, T)> {
+        let next_a = self.a.next();
+        let next_b = self.b.next();
+        match (next_a, next_b) {
+            (Some(x), Some(y)) => Some((x, y)),
+            (Some(x), None) => Some((x, self.def)),
+            (None, Some(y)) => Some((self.def, y)),
+            (None, None) => None
+        }
+    }
+}
+
+impl <D, W, M> Ops<M> for GenericOps
+        where D: Digit<W>, W: Word<D>, M: Data<D> {
+    fn unsigned_add(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+        out.data.clear();
+        let mut t: W = Int::zero();
+        for (tmpa, tmpb) in zip_with_default(Int::zero(), a.data[].iter().map(|x| *x), b.data[].iter().map(|x| *x)) {
+            t = t + tmpa.as_word() + tmpb.as_word();
+            out.data.push(t.as_digit());
+            t = t >> Digit::<W>::bits();
+        }
+        if t != Int::zero() {
+            out.data.push(t.as_digit());
+        }
+        clamp(out);
+    }
+
+    /// out = a - b; abs(a) >= abs(b)
+    fn unsigned_sub(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+        out.data.clear();
+        let mut t: W = Int::zero();
+        let mut a_iter = a.data[].iter();
+        for (&tmpa, &tmpb) in a_iter.by_ref().zip(b.data[].iter()) {
+            t = tmpa.as_word() - tmpb.as_word() + t;
+            out.data.push(t.as_digit());
+            t = (t >> Digit::<W>::bits()) & Int::one();
+        }
+        for &tmpa in a_iter {
+            t = tmpa.as_word() - t;
+            out.data.push(t.as_digit());
+            t = (t >> Digit::<W>::bits()) & Int::one();
+        }
+        clamp(out);
+    }
+}
+
+/// Unsigned comparison
+pub fn cmp_mag<D, W, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
+        where D: Digit<W>, W: Word<D>, M: Data<D> {
+    if a.data.len() > b.data.len() {
+        return 1;
+    } else if a.data.len() < b.data.len() {
+        return -1;
+    } else {
+        for (&tmpa, &tmpb) in a.data[].iter().rev().zip(b.data[].iter().rev()) {
+            if tmpa > tmpb {
+                return 1
+            } else if tmpa < tmpb {
+                return -1
+            }
+        }
+        return 0;
+    }
+}
+
+/// Signed comparison
+pub fn cmp<D, W, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
+        where D: Digit<W>, W: Word<D>, M: Data<D> {
+    if !a.pos && b.pos {
+        return -1;
+    } else if a.pos && b.pos {
+        return 1;
+    } else {
+        // compare digits
+        if !a.pos {
+            // if negative compare opposite direction
+            return cmp_mag(b, a);
+        } else {
+            return cmp_mag(a, b);
+        }
+    }
+}
+
+pub fn add<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<M> {
+    if a.pos == b.pos {
+        out.pos = a.pos;
+        ops.unsigned_add(out, a, b);
+    } else {
+        // one positive, the other negative
+        // subtract the one with the greater magnitude from
+        // the one of the lesser magnitude. The result gets
+        // the sign of the one with the greater magnitude.
+        if cmp_mag(a, b) == -1 {
+            out.pos = b.pos;
+            ops.unsigned_sub(out, b, a);
+        } else {
+            out.pos = b.pos;
+            ops.unsigned_sub(out, a, b);
+        }
+    }
+}
+
+pub fn sub<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<M> {
+    // subtract a negative from a positive, OR
+    // subtract a positive from a negative.
+    // In either case, ADD their magnitudes,
+    // and use the sign of the first number.
+    if a.pos != b.pos {
+        out.pos = a.pos;
+        ops.unsigned_add(out, a, b);
+    } else {
+        // subtract a positive from a positive, OR
+        // subtract a negative from a negative.
+        // First, take the difference between their
+        // magnitudes, then...
+        if cmp_mag(a, b) >= 0 {
+            out.pos = a.pos;
+            // The first has a larger or equal magnitude
+            ops.unsigned_sub(out, a, b);
+        } else {
+            // The result has the *opposite* sign from
+            // the first number.
+            out.pos = !a.pos;
+            // The second has a larger magnitude
+            ops.unsigned_sub(out, b, a);
+        }
+    }
+}
+
+fn test() {
+    let a: Bignum<DataU16x100> = Bignum::new();
+    let b: Bignum<DataU16x100> = Bignum::new();
+    let mut x: Bignum<DataU16x100> = Bignum::new();
+
+    add(&mut x, &a, &b, GenericOps);
 }

@@ -6,6 +6,7 @@
 
 use std::mem;
 use std::num::Int;
+use std::cmp;
 
 pub trait Digit<W>: Int {
     fn as_word(self) -> W;
@@ -54,6 +55,9 @@ pub trait Data<T>: Index<uint, T> + IndexMut<uint, T> + Slice<uint, [T]> + Slice
     }
 
     fn is_empty(&self) -> bool { self.len() == 0}
+
+    fn as_ptr(&self) -> *const T;
+    fn as_mut_ptr(&mut self) -> *mut T;
 }
 
 #[macro_export]
@@ -141,6 +145,14 @@ macro_rules! bignum_data(
                 }
                 self.len += additional;
             }
+
+            fn as_ptr(&self) -> *const $ty {
+                self.data.as_ptr()
+            }
+
+            fn as_mut_ptr(&mut self) -> *mut $ty {
+                self.data.as_mut_ptr()
+            }
         }
     }
 )
@@ -175,9 +187,10 @@ pub fn clamp<D, W, M>(x: &mut Bignum<M>)
 }
 
 
-pub trait Ops<M> {
-    fn unsigned_add(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
-    fn unsigned_sub(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
+pub trait Ops<D, W, M>: Copy {
+    fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
+    fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
+    fn muladd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D);
 }
 
 pub struct GenericOps;
@@ -210,9 +223,9 @@ impl <T: Copy, A: Iterator<T>, B: Iterator<T>> Iterator<(T, T)> for ZipWithDefau
     }
 }
 
-impl <D, W, M> Ops<M> for GenericOps
+impl <D, W, M> Ops<D, W, M> for GenericOps
         where D: Digit<W>, W: Word<D>, M: Data<D> {
-    fn unsigned_add(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+    fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
         let mut t: W = Int::zero();
         for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[].iter(), b.data[].iter()) {
@@ -227,7 +240,7 @@ impl <D, W, M> Ops<M> for GenericOps
     }
 
     /// out = a - b; abs(a) >= abs(b)
-    fn unsigned_sub(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+    fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
         let mut t: W = Int::zero();
         let mut a_iter = a.data[].iter();
@@ -242,6 +255,16 @@ impl <D, W, M> Ops<M> for GenericOps
             t = t.shift_digit_right();
         }
         clamp(out);
+    }
+
+    fn muladd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D) {
+        let mut t: W;
+        t = c0.as_word() + i.as_word() * j.as_word();
+        c0 = t.as_digit();
+        t = c1.as_word() + t.shift_digit_right();
+        c1 = t.as_digit();
+        c2 = c2 + t.shift_digit_right().as_digit();
+        (c0, c1, c2)
     }
 }
 
@@ -283,7 +306,7 @@ pub fn cmp<D, W, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
 }
 
 pub fn add<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<M> {
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<D, W, M> {
     if a.pos == b.pos {
         out.pos = a.pos;
         ops.unsigned_add(out, a, b);
@@ -303,7 +326,7 @@ pub fn add<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O
 }
 
 pub fn sub<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<M> {
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<D, W, M> {
     // subtract a negative from a positive, OR
     // subtract a positive from a negative.
     // In either case, ADD their magnitudes,
@@ -328,6 +351,56 @@ pub fn sub<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O
             ops.unsigned_sub(out, b, a);
         }
     }
+}
+
+pub fn mul<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<D, W, M> {
+    let mut c0;
+    let mut c1: D = Int::zero();
+    let mut c2: D = Int::zero();
+
+    let result_used = a.data.len() + b.data.len();
+
+    out.data.clear();
+
+    // The entire contents of the data is potentially
+    // uninitialized after this. However, every item will be set
+    // in the following loop.
+    unsafe { out.data.grow_uninit(result_used); }
+
+    for ix in range(0, result_used) {
+        let ty = cmp::min(ix, b.data.len() - 1);
+        let tx = ix - ty;
+        let iy = cmp::min(a.data.len() - tx, ty + 1);
+
+        c0 = c1;
+        c1 = c2;
+        c2 = Int::zero();
+
+        let mut tmpx = unsafe { a.data.as_ptr().offset(tx as int) };
+        let mut tmpy = unsafe { b.data.as_ptr().offset(ty as int) };
+        for _ in range(0, iy) {
+            unsafe {
+                let (_c0, _c1, _c2) = ops.muladd(*tmpx, *tmpy, c0, c1, c2);
+                c0 = _c0;
+                c1 = _c1;
+                c2 = _c2;
+                tmpx = tmpx.offset(1);
+                tmpy = tmpy.offset(-1);
+            }
+        }
+
+        unsafe { *out.data.as_mut_ptr().offset(ix as int) = c0; }
+    }
+
+    out.pos = a.pos == b.pos;
+
+    clamp(out);
+}
+
+pub fn div<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit<W>, W: Word<D>, M: Data<D>, O: Ops<D, W, M> {
+
 }
 
 fn test() {

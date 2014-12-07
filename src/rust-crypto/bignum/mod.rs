@@ -9,11 +9,11 @@ use std::num::Int;
 
 pub trait Digit<W>: Int {
     fn as_word(self) -> W;
-    fn bits() -> uint;
 }
 
 pub trait Word<D>: Int {
     fn as_digit(self) -> D;
+    fn shift_digit_right(self) -> Self;
 }
 
 /*
@@ -25,7 +25,6 @@ impl Digit<u64> for u32 {
 
 impl Digit<u32> for u16 {
     fn as_word(self) -> u32 { self as u32 }
-    fn bits() -> uint { 16 }
 }
 
 /*
@@ -36,6 +35,7 @@ impl Word<u32> for u64 {
 
 impl Word<u16> for u32 {
     fn as_digit(self) -> u16 { self as u16 }
+    fn shift_digit_right(self) -> u32 { self >> 16 }
 }
 
 pub trait Data<T>: Index<uint, T> + IndexMut<uint, T> + Slice<uint, [T]> + SliceMut<uint, [T]> {
@@ -215,10 +215,10 @@ impl <D, W, M> Ops<M> for GenericOps
     fn unsigned_add(self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
         let mut t: W = Int::zero();
-        for (tmpa, tmpb) in zip_with_default(Int::zero(), a.data[].iter().map(|x| *x), b.data[].iter().map(|x| *x)) {
+        for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[].iter(), b.data[].iter()) {
             t = t + tmpa.as_word() + tmpb.as_word();
             out.data.push(t.as_digit());
-            t = t >> Digit::<W>::bits();
+            t = t.shift_digit_right();
         }
         if t != Int::zero() {
             out.data.push(t.as_digit());
@@ -234,12 +234,12 @@ impl <D, W, M> Ops<M> for GenericOps
         for (&tmpa, &tmpb) in a_iter.by_ref().zip(b.data[].iter()) {
             t = tmpa.as_word() - tmpb.as_word() + t;
             out.data.push(t.as_digit());
-            t = (t >> Digit::<W>::bits()) & Int::one();
+            t = t.shift_digit_right();
         }
         for &tmpa in a_iter {
             t = tmpa.as_word() - t;
             out.data.push(t.as_digit());
-            t = (t >> Digit::<W>::bits()) & Int::one();
+            t = t.shift_digit_right();
         }
         clamp(out);
     }

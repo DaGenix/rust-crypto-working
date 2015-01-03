@@ -4,6 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::ops::{Index, IndexMut, Slice, SliceMut};
 use std::mem;
 use std::num::Int;
 use std::cmp;
@@ -65,7 +66,7 @@ macro_rules! bignum_data(
     ($name:ident, $ty:ty, $size:expr) => {
         pub struct $name {
             len: uint,
-            data: [$ty, ..$size]
+            data: [$ty; $size]
         }
 
         impl Index<uint, $ty> for $name {
@@ -96,23 +97,23 @@ macro_rules! bignum_data(
         impl SliceMut<uint, [$ty]> for $name {
             fn as_mut_slice_(&mut self) -> &mut [$ty] {
                 let l = self.len();
-                self.data[mut ..l]
+                &mut *self.data[..l]
             }
             fn slice_from_or_fail_mut(&mut self, start: &uint) -> &mut [$ty] {
                 let l = self.len();
-                self.data[mut *start..l]
+                &mut *self.data[*start..l]
             }
             fn slice_to_or_fail_mut(&mut self, end: &uint) -> &mut [$ty] {
                 if *end > self.len() {
                     panic!("Out of bounds");
                 }
-                self.data[mut ..*end]
+                &mut *self.data[..*end]
             }
             fn slice_or_fail_mut(&mut self, start: &uint, end: &uint) -> &mut [$ty] {
                 if *end > self.len() {
                     panic!("Out of bounds");
                 }
-                self.data[mut *start..*end]
+                &mut *self.data[*start..*end]
             }
         }
 
@@ -155,9 +156,9 @@ macro_rules! bignum_data(
             }
         }
     }
-)
+);
 
-bignum_data!(DataU16x100, u16, 100)
+bignum_data!(DataU16x100, u16, 100);
 
 
 pub struct Bignum<T> {
@@ -193,6 +194,7 @@ pub trait Ops<D, W, M>: Copy {
     fn muladd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D);
 }
 
+#[derive(Copy)]
 pub struct GenericOps;
 
 struct ZipWithDefault <T, A, B> {

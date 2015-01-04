@@ -5,17 +5,19 @@
 // except according to those terms.
 
 use std::ops::{Index, IndexMut, Slice, SliceMut};
-use std::mem;
+use std::{cmp, mem, ptr};
 use std::num::Int;
-use std::cmp;
 
-pub trait Digit: Int {
+// Must by Copy so that we can do byte copies
+pub trait Digit: Int + Copy {
     type Word: WordOps<Self>;
 
     fn as_word(self) -> Self::Word;
+    fn bits(self) -> uint;
 }
 
-pub trait WordOps<D>: Int {
+// Must by Copy so that we can do byte copies
+pub trait WordOps<D>: Int + Copy {
     fn shift_digit_right(self) -> Self;
     fn as_digit(self) -> D;
 }
@@ -25,10 +27,15 @@ pub trait WordOps<D>: Int {
 fn as_digit<D, W: WordOps<D>>(w: W) -> D { w.as_digit() }
 fn shift_digit_right<D, W: WordOps<D>>(w: W) -> W { w.shift_digit_right() }
 
+fn bits<T>() -> uint {
+    mem::size_of::<T>() * 8
+}
+
 impl Digit for u16 {
     type Word = u32;
 
     fn as_word(self) -> u32 { self as u32 }
+    fn bits(self) -> uint { 16 }
 }
 
 impl WordOps<u16> for u32 {
@@ -42,6 +49,7 @@ pub trait Data<T>: Index<uint, T> + IndexMut<uint, T> + Slice<uint, [T]> + Slice
     fn capacity(&self) -> uint;
     fn clear(&mut self);
     unsafe fn grow_uninit(&mut self, additional: uint);
+    fn shrink(&mut self, ammount: uint);
     fn pop(&mut self);
 
     fn push(&mut self, val: T) {
@@ -142,6 +150,13 @@ macro_rules! bignum_data(
                     panic!("Size too big");
                 }
                 self.len += additional;
+            }
+
+            fn shrink(&mut self, ammount: uint) {
+                if ammount > self.len {
+                    panic!("Ammount too big");
+                }
+                self.len -= ammount;
             }
 
             fn as_ptr(&self) -> *const $ty {
@@ -263,6 +278,28 @@ impl <D, M> Ops<D, M> for GenericOps
         c2 = c2 + as_digit(shift_digit_right(t));
         (c0, c1, c2)
     }
+}
+
+fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<D> {
+    x.data.clear();
+    unsafe {
+        x.data.grow_uninit(a.data.len());
+        ptr::copy_nonoverlapping_memory(
+            (&mut *x.data[]).as_mut_ptr(),
+            a.data[].as_ptr(),
+            a.data.len());
+    }
+    x.pos = a.pos;
+}
+
+fn is_zero<D, M>(a: &Bignum<M>) -> bool
+        where D: Digit, M: Data<D> {
+    a.data.is_empty()
+}
+
+fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<D> {
+    a.data.clear();
+    a.pos = true;
 }
 
 /// Unsigned comparison
@@ -395,30 +432,215 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
     clamp(out);
 }
 
-fn is_zero<D, M>(a: &Bignum<M>) -> bool
-        where D: Digit, M: Data<D> {
-    a.data.is_empty()
+// x = a * 2**b
+fn mul_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, mut b: uint) where D: Digit, M: Data<D> {
+    copy(out, a);
+
+    let digit_bits = bits::<D>();
+
+    // handle whole digits
+    if b >= digit_bits {
+        lsh_digits(out, b / digit_bits);
+    }
+    b %= digit_bits;
+
+    // shift the digits
+    if b != 0 {
+        let mut carry: D = Int::zero();
+        let shift = digit_bits - b;
+        for x in range(0, out.data.len()) {
+            let carrytmp = out.data[x] >> shift;
+            out.data[x] = (out.data[x] << b) + carry;
+            carry = carrytmp;
+        }
+        // store last carry if room
+        if carry != Int::zero() && out.data.len() < out.data.capacity() {
+            let t = out.data.len();
+            unsafe {
+                out.data.grow_uninit(1);
+                out.data[t] = carry;
+            }
+        }
+    }
+
+    clamp(out);
+}
+
+// out = a * b
+fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D) where D: Digit, M: Data<D> {
+    let digit_bits = bits::<D>();
+
+    let old_len = out.data.len();
+    out.data.clear();
+    unsafe {
+        out.data.grow_uninit(a.data.len());
+        out.pos = a.pos;
+        let mut w: <D as Digit>::Word = Int::zero();
+        let mut x: uint = 0;
+        while x < a.data.len() {
+            w = a.data[x].as_word() * b.as_word() + w;
+            out.data[x] = as_digit(w);
+            w = w >> digit_bits;
+            x += 1;
+        }
+        if w != Int::zero() && a.data.len() < a.data.capacity() {
+            let tmp = out.data.len();
+            out.data.grow_uninit(1);
+            out.data[tmp] = as_digit(w);
+            x += 1;
+        }
+        while x < old_len {
+            out.data[x] = Int::zero();
+            x += 1;
+        }
+        clamp(out);
+    }
 }
 
 fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
     // move up and truncate as required
-    let y = cmp::min(a.data.len() + x - 1, a.data.capacity() - 1);
+    let old_len = a.data.len();
+    let new_len = cmp::min(old_len + x, a.data.capacity());
 
-    // store new size
-    a.data.clear();
-    unsafe { a.data.grow_uninit(y + 1); }
+    unsafe {
+        // set new size
+        a.data.grow_uninit(new_len - old_len);
 
-    // move digits
-    for i in range(x, y + 1).rev() {
-        a.data[i] = a.data[i - x];
-    }
+        // move digits
+        for i in range(x, new_len).rev() {
+            a.data[i] = a.data[i - x];
+        }
 
-    // zero lower digits
-    for i in range(0, x) {
-        a.data[i] = Int::zero();
+        // zero lower digits
+        for i in range(0, x) {
+            a.data[i] = Int::zero();
+        }
     }
 
     clamp(a);
+}
+
+fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
+    // too many digits just zero and return
+    if x > a.data.len() {
+        zero(a);
+        return;
+    }
+
+    // shift
+    for y in range(0, a.data.len() - x) {
+        a.data[y] = a.data[y + x];
+    }
+
+    // zero rest
+    for y in range(0, a.data.len()) {
+        a.data[y] = Int::zero();
+    }
+
+    // decrement count
+    a.data.shrink(x);
+    clamp(a);
+}
+
+fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<D> {
+    if a.data.len() == 0 {
+        return 0;
+    }
+
+    let digit_bits = bits::<D>();
+
+    // get number of digits and add that
+    let mut r = (a.data.len() - 1) * digit_bits;
+
+    // take the last digit and count the bits in it
+    let mut q = a.data[a.data.len() - 1];
+    while q > Int::zero() {
+        r += 1;
+        q = q >> 1;
+    }
+
+    r
+}
+
+// out = a mod 2**b
+fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: uint) where D: Digit, M: Data<D> {
+    let digit_bits = bits::<D>();
+
+    // zero if b is zero
+    if b == 0 {
+        zero(out);
+        return;
+    }
+
+    copy(out, a);
+
+    // if 2**b is larger then we just return
+    if b > digit_bits * a.data.len() {
+        return;
+    }
+
+    // zero digits above the last digit of the modulus
+    let start = b / digit_bits + if b % digit_bits == 0 { 0 } else { 1 };
+    for x in range(start, out.data.len()) {
+        out.data[x] = Int::zero();
+    }
+
+    // clear the digit that is not completely outside/inside the modulus
+    let zero: D = Int::zero();
+    out.data[b / digit_bits] = out.data[b / digit_bits] & ((!zero) >> (digit_bits - b));
+
+    clamp(out);
+}
+
+// (quotient, remainder) = a / 2**b
+pub fn div_2d<D, M, O>(
+        quotient: &mut Bignum<M>,
+        remainder: Option<&mut Bignum<M>>,
+        a: &Bignum<M>,
+        b: uint)
+        where D: Digit, M: Data<D>, O: Ops<D, M> {
+    let digit_bits = bits::<D>();
+
+    // if the shift count is == 0 then we do no work
+    if b == 0 {
+        copy(quotient, a);
+        if let Some(r) = remainder {
+            zero(r);
+        }
+        return;
+    }
+
+    let mut t: Bignum<M> = Bignum::new();
+
+    // get the remainder
+    if let Some(r) = remainder {
+        mod_2d(&mut t, a, b);
+    }
+
+    copy(quotient, a);
+
+    // shift by as many digits in the bit count
+    if b >= digit_bits {
+        rsh_digits(quotient, b / digit_bits);
+    }
+
+    // shift any bit count < digit_bits
+    let D: uint = b % digit_bits;
+    if D != 0 {
+        let one: D = Int::one();
+        let mask: D = (one << D) - Int::one();
+        let shift = digit_bits - D;
+        let mut tmpi = quotient.data.len() - 1;
+        let mut r: D = Int::zero();
+        for x in range(0, quotient.data.len()).rev() {
+            let rr = quotient.data[tmpi] & mask;
+            quotient.data[tmpi] = (quotient.data[tmpi] >> D) | (r << shift);
+            tmpi -= 1;
+            r = rr;
+        }
+    }
+
+    clamp(quotient);
 }
 
 pub fn div_rem<D, M, O>(

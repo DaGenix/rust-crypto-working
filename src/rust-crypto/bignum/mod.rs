@@ -682,25 +682,33 @@ pub fn div_rem<D, M, O>(
         return;
     }
 
+    let digit_bits = bits::<D>();
+
+    let neg = a.pos == b.pos;
+
+    let mut q: Bignum<M> = Bignum::new();
+
+    unsafe {
+        q.data.grow_uninit(a.data.len() + 2);
+
+        let mut x: Bignum<M> = Bignum::new();
+        copy(&mut x, a);
+
+        let mut y: Bignum<M> = Bignum::new();
+        copy(&mut y, b);
+
+        // fix the sign
+        x.pos = true;
+        y.pos = true;
+
+        // normalize both x and y, ensure that y >= b/2, [b == 2**digit_bits]
+        let norm = count_bits(&y) % digit_bits;
+
+
+    }
 /*
   fp_int  q, x, y, t1, t2;
   int     n, t, i, norm, neg;
-
-  /* is divisor zero ? */
-  if (fp_iszero (b) == 1) {
-    return FP_VAL;
-  }
-
-  /* if a < b then q=0, r = a */
-  if (fp_cmp_mag (a, b) == FP_LT) {
-    if (d != NULL) {
-      fp_copy (a, d);
-    }
-    if (c != NULL) {
-      fp_zero (c);
-    }
-    return FP_OKAY;
-  }
 
   fp_init(&q);
   q.used = a->used + 2;

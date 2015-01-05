@@ -650,8 +650,20 @@ pub fn div_rem<D, M, O>(
         b: &Bignum<M>,
         ops: O)
         where D: Digit, M: Data<D>, O: Ops<D, M> {
+    if is_zero(b) {
+        panic!("Divide by 0");
+    }
 
-
+    // if a < b, then q = 0, r = a
+    if cmp_mag(a, b) < 0 {
+        if let Some(r) = remainder {
+            copy(r, a);
+        }
+        if let Some(q) = quotient {
+            zero(q);
+        }
+        return;
+    }
 
 /*
   fp_int  q, x, y, t1, t2;

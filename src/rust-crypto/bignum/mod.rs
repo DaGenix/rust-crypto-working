@@ -4,7 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::ops::{Index, IndexMut, Slice, SliceMut};
+use std::ops::{Index, IndexMut, Slice, SliceMut, Add, Sub, Mul, Shl, Shr};
 use std::{cmp, mem, ptr};
 use std::num::Int;
 
@@ -43,7 +43,7 @@ impl WordOps<u16> for u32 {
     fn as_digit(self) -> u16 { self as u16 }
 }
 
-pub trait Data<T>: Index<uint, T> + IndexMut<uint, T> + Slice<uint, [T]> + SliceMut<uint, [T]> {
+pub trait Data<T>: Index<uint, Output=T> + IndexMut<uint, Output=T> + Slice<uint, [T]> + SliceMut<uint, [T]> {
     fn new() -> Self;
     fn len(&self) -> uint;
     fn capacity(&self) -> uint;
@@ -74,11 +74,15 @@ macro_rules! bignum_data(
             data: [$ty; $size]
         }
 
-        impl Index<uint, $ty> for $name {
+        impl Index<uint> for $name {
+            type Output = $ty;
+
             fn index(&self, index: &uint) -> &$ty { &self.data[*index] }
         }
 
-        impl IndexMut<uint, $ty> for $name {
+        impl IndexMut<uint> for $name {
+            type Output = $ty;
+
             fn index_mut(&mut self, index: &uint) -> &mut $ty { &mut self.data[*index] }
         }
 
@@ -213,7 +217,7 @@ struct ZipWithDefault <T, A, B> {
     b: B
 }
 
-fn zip_with_default<T: Copy, A: Iterator<T>, B: Iterator<T>>(def: T, a: A, b: B)
+fn zip_with_default<T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>>(def: T, a: A, b: B)
         -> ZipWithDefault<T, A, B> {
     ZipWithDefault {
         def: def,
@@ -222,7 +226,9 @@ fn zip_with_default<T: Copy, A: Iterator<T>, B: Iterator<T>>(def: T, a: A, b: B)
     }
 }
 
-impl <T: Copy, A: Iterator<T>, B: Iterator<T>> Iterator<(T, T)> for ZipWithDefault<T, A, B> {
+impl <T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for ZipWithDefault<T, A, B> {
+    type Item = (T, T);
+
     fn next(&mut self) -> Option<(T, T)> {
         let next_a = self.a.next();
         let next_b = self.b.next();
@@ -236,7 +242,12 @@ impl <T: Copy, A: Iterator<T>, B: Iterator<T>> Iterator<(T, T)> for ZipWithDefau
 }
 
 impl <D, M> Ops<D, M> for GenericOps
-        where D: Digit, M: Data<D> {
+        where
+            D: Digit,
+            <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
+            <D as Digit>::Word: Sub<Output = <D as Digit>::Word>,
+            <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
+            M: Data<D> {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
         let mut t: <D as Digit>::Word = Int::zero();
@@ -467,7 +478,13 @@ fn mul_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, mut b: uint) where D: Digit,
 }
 
 // out = a * b
-fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D) where D: Digit, M: Data<D> {
+fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
+        where
+            D: Digit,
+            <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
+            <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
+            <D as Digit>::Word: Shr<uint, Output = <D as Digit>::Word>,
+            M: Data<D> {
     let digit_bits = bits::<D>();
 
     let old_len = out.data.len();

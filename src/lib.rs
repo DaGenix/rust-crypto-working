@@ -4,7 +4,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(asm)]
 #![feature(associated_types)]
 #![feature(default_type_params)]
 #![feature(macro_rules)]
@@ -14,6 +13,7 @@
 extern crate "rustc-serialize" as serialize;
 extern crate time;
 #[cfg(test)] extern crate test;
+extern crate libc;
 
 pub mod aes;
 pub mod aessafe;

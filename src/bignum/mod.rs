@@ -4,7 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::ops::{Index, IndexMut, Slice, SliceMut, Add, Sub, Mul, Shl, Shr};
+use std::ops::{Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeTo, FullRange, Add, Sub, Mul, Shl, Shr};
 use std::{cmp, mem, ptr};
 use std::num::Int;
 
@@ -43,7 +43,9 @@ impl WordOps<u16> for u32 {
     fn as_digit(self) -> u16 { self as u16 }
 }
 
-pub trait Data<T>: Index<uint, Output=T> + IndexMut<uint, Output=T> + Slice<uint, [T]> + SliceMut<uint, [T]> {
+pub trait Data {
+    type Item; //=
+
     fn new() -> Self;
     fn len(&self) -> uint;
     fn capacity(&self) -> uint;
@@ -51,82 +53,33 @@ pub trait Data<T>: Index<uint, Output=T> + IndexMut<uint, Output=T> + Slice<uint
     unsafe fn grow_uninit(&mut self, additional: uint);
     fn shrink(&mut self, ammount: uint);
     fn pop(&mut self);
-
-    fn push(&mut self, val: T) {
-        let old_len = self.len();
-        unsafe {
-            self.grow_uninit(1);
-            self[old_len] = val;
-        }
-    }
-
+    fn push(&mut self, val: Self::Item);
     fn is_empty(&self) -> bool { self.len() == 0}
 
-    fn as_ptr(&self) -> *const T;
-    fn as_mut_ptr(&mut self) -> *mut T;
+    fn as_ptr(&self) -> *const Self::Item;
+    fn as_mut_ptr(&mut self) -> *mut Self::Item;
 }
 
 #[macro_export]
 macro_rules! bignum_data(
     ($name:ident, $ty:ty, $size:expr) => {
         pub struct $name {
-            len: uint,
+            len: usize,
             data: [$ty; $size]
         }
 
-        impl Index<uint> for $name {
-            type Output = $ty;
-
-            fn index(&self, index: &uint) -> &$ty { &self.data[*index] }
+        impl Deref for $name {
+            type Target = [$ty];
+            fn deref(&self) -> &[$ty] { &self.data[..self.len] }
         }
 
-        impl IndexMut<uint> for $name {
-            type Output = $ty;
-
-            fn index_mut(&mut self, index: &uint) -> &mut $ty { &mut self.data[*index] }
+        impl DerefMut for $name {
+            fn deref_mut(&mut self) -> &mut [$ty] { &mut self.data[..self.len] }
         }
 
-        impl Slice<uint, [$ty]> for $name {
-            fn as_slice_(&self) -> &[$ty] { self.data[..self.len()] }
-            fn slice_from_or_fail(&self, start: &uint) -> &[$ty] { self.data[*start..self.len()] }
-            fn slice_to_or_fail(&self, end: &uint) -> &[$ty] {
-                if *end > self.len() {
-                    panic!("Out of bounds");
-                }
-                self.data[..*end]
-            }
-            fn slice_or_fail(&self, start: &uint, end: &uint) -> &[$ty] {
-                if *end > self.len() {
-                    panic!("Out of bounds");
-                }
-                self.data[*start..*end]
-            }
-        }
+        impl Data for $name {
+            type Item = $ty;
 
-        impl SliceMut<uint, [$ty]> for $name {
-            fn as_mut_slice_(&mut self) -> &mut [$ty] {
-                let l = self.len();
-                &mut *self.data[..l]
-            }
-            fn slice_from_or_fail_mut(&mut self, start: &uint) -> &mut [$ty] {
-                let l = self.len();
-                &mut *self.data[*start..l]
-            }
-            fn slice_to_or_fail_mut(&mut self, end: &uint) -> &mut [$ty] {
-                if *end > self.len() {
-                    panic!("Out of bounds");
-                }
-                &mut *self.data[..*end]
-            }
-            fn slice_or_fail_mut(&mut self, start: &uint, end: &uint) -> &mut [$ty] {
-                if *end > self.len() {
-                    panic!("Out of bounds");
-                }
-                &mut *self.data[*start..*end]
-            }
-        }
-
-        impl Data<$ty> for $name {
             fn new() -> $name {
                 $name {
                     len: 0,
@@ -147,6 +100,14 @@ macro_rules! bignum_data(
                     panic!("Can't pop empty data");
                 }
                 self.len -= 1;
+            }
+
+            fn push(&mut self, val: $ty) {
+                let old_len = self.len();
+                unsafe {
+                    self.grow_uninit(1);
+                    self[old_len] = val;
+                }
             }
 
             unsafe fn grow_uninit(&mut self, additional: uint) {
@@ -181,8 +142,7 @@ pub struct Bignum<T> {
     pub data: T
 }
 
-impl <D, M> Bignum<M>
-        where D: Digit, M: Data<D> {
+impl <M: Data> Bignum<M> {
     pub fn new() -> Bignum<M> {
         Bignum {
             pos: true,
@@ -191,8 +151,7 @@ impl <D, M> Bignum<M>
     }
 }
 
-pub fn clamp<D, M>(x: &mut Bignum<M>)
-        where D: Digit, M: Data<D> {
+pub fn clamp<D, M>(x: &mut Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> {
     while x.data[].last().map_or(false, |&tmp| tmp == Int::zero()) {
         x.data.pop();
     }
@@ -247,7 +206,7 @@ impl <D, M> Ops<D, M> for GenericOps
             <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
             <D as Digit>::Word: Sub<Output = <D as Digit>::Word>,
             <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
-            M: Data<D> {
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
         let mut t: <D as Digit>::Word = Int::zero();
@@ -291,12 +250,12 @@ impl <D, M> Ops<D, M> for GenericOps
     }
 }
 
-fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<D> {
+fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     x.data.clear();
     unsafe {
         x.data.grow_uninit(a.data.len());
         ptr::copy_nonoverlapping_memory(
-            (&mut *x.data[]).as_mut_ptr(),
+            x.data[].as_mut_ptr(),
             a.data[].as_ptr(),
             a.data.len());
     }
@@ -304,18 +263,18 @@ fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<D> {
 }
 
 fn is_zero<D, M>(a: &Bignum<M>) -> bool
-        where D: Digit, M: Data<D> {
+        where D: Digit, M: Data<Item = D> {
     a.data.is_empty()
 }
 
-fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<D> {
+fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<Item = D> {
     a.data.clear();
     a.pos = true;
 }
 
 /// Unsigned comparison
 pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
-        where D: Digit, M: Data<D> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if a.data.len() > b.data.len() {
         return 1;
     } else if a.data.len() < b.data.len() {
@@ -334,7 +293,7 @@ pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
 
 /// Signed comparison
 pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
-        where D: Digit, M: Data<D> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if !a.pos && b.pos {
         return -1;
     } else if a.pos && b.pos {
@@ -351,7 +310,7 @@ pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
 }
 
 pub fn add<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<D>, O: Ops<D, M> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     if a.pos == b.pos {
         out.pos = a.pos;
         ops.unsigned_add(out, a, b);
@@ -371,7 +330,7 @@ pub fn add<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 pub fn sub<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<D>, O: Ops<D, M> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     // subtract a negative from a positive, OR
     // subtract a positive from a negative.
     // In either case, ADD their magnitudes,
@@ -399,7 +358,7 @@ pub fn sub<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<D>, O: Ops<D, M> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     let mut c0;
     let mut c1: D = Int::zero();
     let mut c2: D = Int::zero();
@@ -444,9 +403,7 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 // x = a * 2**b
-fn mul_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, mut b: uint) where D: Digit, M: Data<D> {
-    copy(out, a);
-
+fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // handle whole digits
@@ -484,7 +441,7 @@ fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
             <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
             <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
             <D as Digit>::Word: Shr<uint, Output = <D as Digit>::Word>,
-            M: Data<D> {
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     let old_len = out.data.len();
@@ -514,7 +471,7 @@ fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
     }
 }
 
-fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
+fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // move up and truncate as required
     let old_len = a.data.len();
     let new_len = cmp::min(old_len + x, a.data.capacity());
@@ -537,7 +494,7 @@ fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
     clamp(a);
 }
 
-fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
+fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // too many digits just zero and return
     if x > a.data.len() {
         zero(a);
@@ -559,7 +516,7 @@ fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<D> {
     clamp(a);
 }
 
-fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<D> {
+fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if a.data.len() == 0 {
         return 0;
     }
@@ -580,7 +537,7 @@ fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<D> {
 }
 
 // out = a mod 2**b
-fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: uint) where D: Digit, M: Data<D> {
+fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // zero if b is zero
@@ -615,7 +572,7 @@ pub fn div_2d<D, M, O>(
         remainder: Option<&mut Bignum<M>>,
         a: &Bignum<M>,
         b: uint)
-        where D: Digit, M: Data<D>, O: Ops<D, M> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     let digit_bits = bits::<D>();
 
     // if the shift count is == 0 then we do no work
@@ -666,7 +623,7 @@ pub fn div_rem<D, M, O>(
         a: &Bignum<M>,
         b: &Bignum<M>,
         ops: O)
-        where D: Digit, M: Data<D>, O: Ops<D, M> {
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     if is_zero(b) {
         panic!("Divide by 0");
     }
@@ -702,35 +659,24 @@ pub fn div_rem<D, M, O>(
         y.pos = true;
 
         // normalize both x and y, ensure that y >= b/2, [b == 2**digit_bits]
-        let norm = count_bits(&y) % digit_bits;
+        let norm = {
+            let mut norm = count_bits(&y) % digit_bits;
+            if norm < digit_bits - 1 {
+                norm = (digit_bits - 1) - norm;
+                mul_2d(&mut x, norm);
+                mul_2d(&mut y, norm);
+                norm
+            } else {
+                0
+            }
+        };
 
-
+        let n = y.data.len() - 1;
+        let t = y.data.len() - 1;
     }
 /*
   fp_int  q, x, y, t1, t2;
   int     n, t, i, norm, neg;
-
-  fp_init(&q);
-  q.used = a->used + 2;
-
-  fp_init(&t1);
-  fp_init(&t2);
-  fp_init_copy(&x, a);
-  fp_init_copy(&y, b);
-
-  /* fix the sign */
-  neg = (a->sign == b->sign) ? FP_ZPOS : FP_NEG;
-  x.sign = y.sign = FP_ZPOS;
-
-  /* normalize both x and y, ensure that y >= b/2, [b == 2**DIGIT_BIT] */
-  norm = fp_count_bits(&y) % DIGIT_BIT;
-  if (norm < (int)(DIGIT_BIT-1)) {
-     norm = (DIGIT_BIT-1) - norm;
-     fp_mul_2d (&x, norm, &x);
-     fp_mul_2d (&y, norm, &y);
-  } else {
-     norm = 0;
-  }
 
   /* note hac does 0 based, so if used==5 then its 0,1,2,3,4, e.g. use 4 */
   n = x.used - 1;

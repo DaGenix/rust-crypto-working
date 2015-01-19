@@ -13,6 +13,8 @@ pub trait Digit: Int + Copy {
     type Word: WordOps<Self>;
 
     fn from_byte(x: u8) -> Self;
+    fn to_byte(self) -> u8;
+
     fn as_word(self) -> Self::Word;
     fn bits(self) -> usize;
 }
@@ -36,6 +38,8 @@ impl Digit for u16 {
     type Word = u32;
 
     fn from_byte(x: u8) -> u16 { x as u16 }
+    fn to_byte(self) -> u8 { self as u8 }
+
     fn as_word(self) -> u32 { self as u32 }
     fn bits(self) -> usize { 16 }
 }
@@ -671,6 +675,8 @@ pub fn div_d<D, W, M, O>(
     // power of two ?
     let result = is_power_of_two(b);
 
+    let digit_bits = bits::<D>();
+
     if let (true, Some(pos)) = result {
         // power of two
         if let Some(rem) = remainder {
@@ -682,48 +688,36 @@ pub fn div_d<D, W, M, O>(
         }
     } else {
         // not a power of is_power_of_two
+        // no easy answer (c'est la vie).  Just division
+        let mut q: Bignum<M> = Bignum::new();
+        unsafe {
+            q.data.grow_uninit(a.data.len());
+            q.pos = a.pos;
+
+            let mut w: W = Int::zero();
+            let mut t: D;
+            for ix in (0..a.data.len()).rev() {
+                w = (w << digit_bits) | a.data[ix].as_word();
+                let mut t: D;
+                if w >= b.as_word() {
+                    t = as_digit(w) / b;
+                    w = w - t.as_word() * b.as_word();
+                } else {
+                    t = Int::zero();
+                }
+                q.data[ix] = t;
+            }
+
+            if let Some(rem) = remainder {
+                *rem = as_digit(w);
+            }
+            if let Some(quot) = quotient {
+                clamp(&mut q);
+                copy(quot, &q);
+            }
+        }
     }
 }
-
-/*
-/* a/b => cb + d == a */
-int fp_div_d(fp_int *a, fp_digit b, fp_int *c, fp_digit *d)
-{
-  fp_int   q;
-  fp_word  w;
-  fp_digit t;
-  int      ix;
-
-  /* no easy answer [c'est la vie].  Just division */
-  fp_init(&q);
-
-  q.used = a->used;
-  q.sign = a->sign;
-  w = 0;
-  for (ix = a->used - 1; ix >= 0; ix--) {
-     w = (w << ((fp_word)DIGIT_BIT)) | ((fp_word)a->dp[ix]);
-
-     if (w >= b) {
-        t = (fp_digit)(w / b);
-        w -= ((fp_word)t) * ((fp_word)b);
-      } else {
-        t = 0;
-      }
-      q.dp[ix] = (fp_digit)t;
-  }
-
-  if (d != NULL) {
-     *d = (fp_digit)w;
-  }
-
-  if (c != NULL) {
-     fp_clamp(&q);
-     fp_copy(&q, c);
-  }
-
-  return FP_OKAY;
-}
-*/
 
 pub fn div_rem<D, W, M, O>(
         quotient: Option<&mut Bignum<M>>,
@@ -954,8 +948,8 @@ fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
     }
 }
 
-/*
-fn to_radix<D, M, O>(a: &Bignum<M>, radix: usize, ops: O) -> String
+
+fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
     where
         D: Digit,
         M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
@@ -983,64 +977,41 @@ fn to_radix<D, M, O>(a: &Bignum<M>, radix: usize, ops: O) -> String
         t.pos = true;
     }
 
+    let mut d: D = Int::zero();
+    let mut tmp: Bignum<M> = Bignum::new();
     while !is_zero(&t) {
-        div_d(&mut t,
+        copy(&mut tmp, &t);
+        div_d(Some(&mut t), Some(&mut d), &tmp, Digit::from_byte(radix), ops);
+        result.push(radix_digits.as_bytes()[d.to_byte() as usize] as char);
     }
+
+    // reverse the string
+    unsafe { result.as_mut_vec().reverse() };
+
+    result
 }
-*/
 
-/*
-int fp_toradix(fp_int *a, char *str, int radix)
-{
-  int     digs;
-  fp_int  t;
-  fp_digit d;
-  char   *_s = str;
+fn main() {
+//    let a: Bignum<DataU16x100> = Bignum::new();
+//    let b: Bignum<DataU16x100> = Bignum::new();
+//    let mut x: Bignum<DataU16x100> = Bignum::new();
+//
+//    add(&mut x, &a, &b, GenericOps);
 
-  /* check range of the radix */
-  if (radix < 2 || radix > 64) {
-    return FP_VAL;
-  }
+    type BN = Bignum<DataU16x100>;
 
-  /* quick out if its zero */
-  if (fp_iszero(a) == 1) {
-     *str++ = '0';
-     *str = '\0';
-     return FP_OKAY;
-  }
+    let mut a: BN = Bignum::new();
+    let mut b: BN = Bignum::new();
+    let mut r: BN = Bignum::new();
 
-  fp_init_copy(&t, a);
+    read_radix(&mut a, "65534", 10, GenericOps);
+    read_radix(&mut b, "2", 10, GenericOps);
 
-  /* if it is negative output a - */
-  if (t.sign == FP_NEG) {
-    ++_s;
-    *str++ = '-';
-    t.sign = FP_ZPOS;
-  }
+    add(&mut r, &a, &b, GenericOps);
 
-  digs = 0;
-  while (fp_iszero (&t) == FP_NO) {
-    fp_div_d (&t, (fp_digit) radix, &t, &d);
-    *str++ = fp_s_rmap[d];
-    ++digs;
-  }
+    println!("data[0]: {}", r.data[0]);
+    println!("data[1]: {}", r.data[1]);
 
-  /* reverse the digits of the string.  In this case _s points
-   * to the first digit [exluding the sign] of the number]
-   */
-  fp_reverse ((unsigned char *)_s, digs);
-
-  /* append a NULL so the string is properly terminated */
-  *str = '\0';
-  return FP_OKAY;
-}
-*/
-
-
-fn test() {
-    let a: Bignum<DataU16x100> = Bignum::new();
-    let b: Bignum<DataU16x100> = Bignum::new();
-    let mut x: Bignum<DataU16x100> = Bignum::new();
-
-    add(&mut x, &a, &b, GenericOps);
+    let result = to_radix(&r, 10, GenericOps);
+    println!("Result: {}", &result[]);
 }

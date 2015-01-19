@@ -12,8 +12,9 @@ use std::num::Int;
 pub trait Digit: Int + Copy {
     type Word: WordOps<Self>;
 
+    fn from_byte(x: u8) -> Self;
     fn as_word(self) -> Self::Word;
-    fn bits(self) -> uint;
+    fn bits(self) -> usize;
 }
 
 // Must by Copy so that we can do byte copies
@@ -27,15 +28,16 @@ pub trait WordOps<D>: Int + Copy {
 fn as_digit<D, W: WordOps<D>>(w: W) -> D { w.as_digit() }
 fn shift_digit_right<D, W: WordOps<D>>(w: W) -> W { w.shift_digit_right() }
 
-fn bits<T>() -> uint {
+fn bits<T>() -> usize {
     mem::size_of::<T>() * 8
 }
 
 impl Digit for u16 {
     type Word = u32;
 
+    fn from_byte(x: u8) -> u16 { x as u16 }
     fn as_word(self) -> u32 { self as u32 }
-    fn bits(self) -> uint { 16 }
+    fn bits(self) -> usize { 16 }
 }
 
 impl WordOps<u16> for u32 {
@@ -47,11 +49,11 @@ pub trait Data {
     type Item; //=
 
     fn new() -> Self;
-    fn len(&self) -> uint;
-    fn capacity(&self) -> uint;
+    fn len(&self) -> usize;
+    fn capacity(&self) -> usize;
     fn clear(&mut self);
-    unsafe fn grow_uninit(&mut self, additional: uint);
-    fn shrink(&mut self, ammount: uint);
+    unsafe fn grow_uninit(&mut self, additional: usize);
+    fn shrink(&mut self, ammount: usize);
     fn pop(&mut self);
     fn push(&mut self, val: Self::Item);
     fn is_empty(&self) -> bool { self.len() == 0}
@@ -87,9 +89,9 @@ macro_rules! bignum_data(
                 }
             }
 
-            fn len(&self) -> uint { self.len }
+            fn len(&self) -> usize { self.len }
 
-            fn capacity(&self) -> uint { $size }
+            fn capacity(&self) -> usize { $size }
 
             fn clear(&mut self) {
                 self.len = 0;
@@ -110,14 +112,14 @@ macro_rules! bignum_data(
                 }
             }
 
-            unsafe fn grow_uninit(&mut self, additional: uint) {
+            unsafe fn grow_uninit(&mut self, additional: usize) {
                 if self.len + additional > $size {
                     panic!("Size too big");
                 }
                 self.len += additional;
             }
 
-            fn shrink(&mut self, ammount: uint) {
+            fn shrink(&mut self, ammount: usize) {
                 if ammount > self.len {
                     panic!("Ammount too big");
                 }
@@ -200,12 +202,10 @@ impl <T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for ZipWit
     }
 }
 
-impl <D, M> Ops<D, M> for GenericOps
+impl <D, W, M> Ops<D, M> for GenericOps
         where
-            D: Digit,
-            <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
-            <D as Digit>::Word: Sub<Output = <D as Digit>::Word>,
-            <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
+            D: Digit<Word = W>,
+            W: WordOps<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         out.data.clear();
@@ -329,6 +329,16 @@ pub fn add<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
     }
 }
 
+pub fn add_d<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: D, ops: O)
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+    let mut tmp: Bignum<M> = Bignum::new();
+    unsafe {
+        tmp.data.grow_uninit(1);
+        tmp.data[0] = b;
+    }
+    add(out, a, &tmp, ops);
+}
+
 pub fn sub<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
         where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     // subtract a negative from a positive, OR
@@ -403,7 +413,7 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 // x = a * 2**b
-fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // handle whole digits
@@ -435,12 +445,10 @@ fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: uint) where D: Digit, M: Data<Item =
 }
 
 // out = a * b
-fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
+fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
         where
-            D: Digit,
-            <D as Digit>::Word: Mul<Output = <D as Digit>::Word>,
-            <D as Digit>::Word: Add<Output = <D as Digit>::Word>,
-            <D as Digit>::Word: Shr<uint, Output = <D as Digit>::Word>,
+            D: Digit<Word = W>,
+            W: WordOps<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
@@ -450,7 +458,7 @@ fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
         out.data.grow_uninit(a.data.len());
         out.pos = a.pos;
         let mut w: <D as Digit>::Word = Int::zero();
-        let mut x: uint = 0;
+        let mut x: usize = 0;
         while x < a.data.len() {
             w = a.data[x].as_word() * b.as_word() + w;
             out.data[x] = as_digit(w);
@@ -471,7 +479,7 @@ fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
     }
 }
 
-fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // move up and truncate as required
     let old_len = a.data.len();
     let new_len = cmp::min(old_len + x, a.data.capacity());
@@ -494,7 +502,7 @@ fn lsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D
     clamp(a);
 }
 
-fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // too many digits just zero and return
     if x > a.data.len() {
         zero(a);
@@ -516,7 +524,7 @@ fn rsh_digits<D, M>(a: &mut Bignum<M>, x: uint) where D: Digit, M: Data<Item = D
     clamp(a);
 }
 
-fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if a.data.len() == 0 {
         return 0;
     }
@@ -537,7 +545,7 @@ fn count_bits<D, M>(a: &Bignum<M>) -> uint where D: Digit, M: Data<Item = D> + D
 }
 
 // out = a mod 2**b
-fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: uint) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // zero if b is zero
@@ -567,12 +575,12 @@ fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: uint) where D: Digit, M: 
 }
 
 // (quotient, remainder) = a / 2**b
-pub fn div_2d<D, M, O>(
+pub fn div_2d<D, M>(
         quotient: &mut Bignum<M>,
         remainder: Option<&mut Bignum<M>>,
         a: &Bignum<M>,
-        b: uint)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        b: usize)
+        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // if the shift count is == 0 then we do no work
@@ -599,7 +607,7 @@ pub fn div_2d<D, M, O>(
     }
 
     // shift any bit count < digit_bits
-    let D: uint = b % digit_bits;
+    let D: usize = b % digit_bits;
     if D != 0 {
         let one: D = Int::one();
         let mask: D = (one << D) - Int::one();
@@ -617,13 +625,116 @@ pub fn div_2d<D, M, O>(
     clamp(quotient);
 }
 
-pub fn div_rem<D, M, O>(
+fn is_power_of_two<D>(b: D) -> (bool, Option<usize>) where D: Digit {
+    // fast return if no power of two
+    if b == Int::zero() || (b & (b - Int::one()) != Int::zero()) {
+        return (false, None);
+    }
+
+    let digit_bits = bits::<D>();
+    for x in (0..digit_bits) {
+        let one: D = Int::one();
+        if b == one << x {
+            return (true, Some(x));
+        }
+    }
+    return (false, None);
+}
+
+pub fn div_d<D, W, M, O>(
+        quotient: Option<&mut Bignum<M>>,
+        remainder: Option<&mut D>,
+        a: &Bignum<M>,
+        b: D,
+        ops: O)
+        where
+            D: Digit<Word = W>,
+            W: WordOps<D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+
+    // cannot divide by zero
+    if b == Int::zero() {
+        panic!("Divide by 0");
+    }
+
+    // quick outs
+    if b == Int::one() || is_zero(a) {
+        if let Some(rem) = remainder {
+            *rem = Int::zero();
+        }
+        if let Some(quot) = quotient {
+            copy(quot, a);
+        }
+        return;
+    }
+
+    // power of two ?
+    let result = is_power_of_two(b);
+
+    if let (true, Some(pos)) = result {
+        // power of two
+        if let Some(rem) = remainder {
+            let one: D = Int::one();
+            *rem = a.data[0] & ((one << pos) - one);
+        }
+        if let Some(quot) = quotient {
+            div_2d(quot, None, a, pos);
+        }
+    } else {
+        // not a power of is_power_of_two
+    }
+}
+
+/*
+/* a/b => cb + d == a */
+int fp_div_d(fp_int *a, fp_digit b, fp_int *c, fp_digit *d)
+{
+  fp_int   q;
+  fp_word  w;
+  fp_digit t;
+  int      ix;
+
+  /* no easy answer [c'est la vie].  Just division */
+  fp_init(&q);
+
+  q.used = a->used;
+  q.sign = a->sign;
+  w = 0;
+  for (ix = a->used - 1; ix >= 0; ix--) {
+     w = (w << ((fp_word)DIGIT_BIT)) | ((fp_word)a->dp[ix]);
+
+     if (w >= b) {
+        t = (fp_digit)(w / b);
+        w -= ((fp_word)t) * ((fp_word)b);
+      } else {
+        t = 0;
+      }
+      q.dp[ix] = (fp_digit)t;
+  }
+
+  if (d != NULL) {
+     *d = (fp_digit)w;
+  }
+
+  if (c != NULL) {
+     fp_clamp(&q);
+     fp_copy(&q, c);
+  }
+
+  return FP_OKAY;
+}
+*/
+
+pub fn div_rem<D, W, M, O>(
         quotient: Option<&mut Bignum<M>>,
         remainder: Option<&mut Bignum<M>>,
         a: &Bignum<M>,
         b: &Bignum<M>,
         ops: O)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where
+            D: Digit<Word = W>,
+            W: WordOps<D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     if is_zero(b) {
         panic!("Divide by 0");
     }
@@ -633,8 +744,8 @@ pub fn div_rem<D, M, O>(
         if let Some(r) = remainder {
             copy(r, a);
         }
-        if let Some(q) = quotient {
-            zero(q);
+        if let Some(quot) = quotient {
+            zero(quot);
         }
         return;
     }
@@ -642,6 +753,14 @@ pub fn div_rem<D, M, O>(
     let digit_bits = bits::<D>();
 
     let neg = a.pos == b.pos;
+
+    // temporary needed because most functions take distinct input and
+    // output parameters. Making one of the inputs also an output might
+    // allow for this to be eliminated.
+    let mut tmp: Bignum<M> = Bignum::new();
+
+    let mut t1: Bignum<M> = Bignum::new();
+    let mut t2: Bignum<M> = Bignum::new();
 
     let mut q: Bignum<M> = Bignum::new();
 
@@ -671,112 +790,252 @@ pub fn div_rem<D, M, O>(
             }
         };
 
+        // note hac does 0 based, so if used==5 then its 0,1,2,3,4, e.g. use 4
         let n = y.data.len() - 1;
         let t = y.data.len() - 1;
+
+        lsh_digits(&mut y, n - t);
+
+        while cmp(&x, &y) != -1 {
+            q.data[n - t] = q.data[n - t] + Int::one();
+            copy(&mut tmp, &x);
+            sub(&mut x, &tmp, &y, ops);
+        }
+
+        // reset y by shifting it back down
+        rsh_digits(&mut y, n - t);
+
+        // step 3. for i from n down to (t + 1)
+        for i in (t + 1 .. n + 1).rev() {
+            if i > x.data.len() {
+                continue;
+            }
+
+            /* step 3.1 if xi == yt then set q{i-t-1} to b-1,
+            * otherwise set q{i-t-1} to (xi*b + x{i-1})/yt */
+            if x.data[i] == y.data[i] {
+                let zero: D = Int::zero();
+                q.data[i - t - 1] = !zero;
+            } else {
+                let mut tmpword = x.data[i].as_word() << digit_bits;
+                tmpword = tmpword | x.data[i - 1].as_word();
+                tmpword = tmpword / y.data[t].as_word();
+                q.data[i - t - 1] = as_digit(tmpword);
+            }
+
+            /* while (q{i-t-1} * (yt * b + y{t-1})) >
+                    xi * b**2 + xi-1 * b + xi-2
+
+            do q{i-t-1} -= 1;
+            */
+            q.data[i - t - 1] = q.data[i - t - 1] + Int::one();
+            loop {
+                q.data[i - t - 1] = q.data[i - t - 1] - Int::one();
+
+                // find left hand
+                zero(&mut t1);
+                t1.data.grow_uninit(2);
+                t1.data[0] = if t - 1 < 0 { Int::zero() } else { y.data[t - 1] };
+                t1.data[1] = y.data[t];
+                copy(&mut tmp, &t1);
+                mul_d(&mut t1, &tmp, q.data[i - t - 1]);
+
+                // find right hand
+                zero(&mut t2);
+                t2.data.grow_uninit(3);
+                t2.data[0] = if i - 2 < 0 { Int::zero() } else { x.data[i - 2] };
+                t2.data[1] = if i - 1 < 0 { Int::zero() } else { x.data[i - 1] };
+                t2.data[2] = x.data[i];
+
+                if cmp_mag(&t1, &t2) <= 0 {
+                    break;
+                }
+            }
+
+            // step 3.3 x = x - q{i-t-1} * y * b**{i-t-1}
+            mul_d(&mut t1, &y, q.data[i - t - 1]);
+            lsh_digits(&mut t1, i - t - 1);
+            copy(&mut tmp, &x);
+            sub(&mut x, &tmp, &t1, ops);
+
+            // if x < 0 then { x = x + y*b**{i-t-1}; q{i-t-1} -= 1; }
+            if !x.pos {
+                copy(&mut t1, &y);
+                lsh_digits(&mut t1, i - t - 1);
+                copy(&mut tmp, &x);
+                add(&mut x, &tmp, &t1, ops);
+                q.data[i - t - 1] = q.data[i - t - 1] - Int::one();
+            }
+        }
+
+
+        // now q is the quotient and x is the remainder (which we have to normalize)
+
+        // get sign before writing to c
+        x.pos = if x.data.len() == 0 { true } else { a.pos };
+
+        if let Some(quot) = quotient {
+            clamp(&mut q);
+            copy(quot, &q);
+            quot.pos = neg;
+        }
+
+        if let Some(rem) = remainder {
+            copy(&mut tmp, &x);
+            div_2d(&mut x, None, &tmp, norm);
+
+            // the following is a kludge, essentially we were seeing the right remainder but
+            // with excess digits that should have been zero
+            for i in (b.data.len() .. x.data.len()) {
+                x.data[i] = Int::zero();
+            }
+            clamp(&mut x);
+            copy(rem, &x);
+        }
     }
-/*
-  fp_int  q, x, y, t1, t2;
-  int     n, t, i, norm, neg;
-
-  /* note hac does 0 based, so if used==5 then its 0,1,2,3,4, e.g. use 4 */
-  n = x.used - 1;
-  t = y.used - 1;
-
-  /* while (x >= y*b**n-t) do { q[n-t] += 1; x -= y*b**{n-t} } */
-  fp_lshd (&y, n - t);                                             /* y = y*b**{n-t} */
-
-  while (fp_cmp (&x, &y) != FP_LT) {
-    ++(q.dp[n - t]);
-    fp_sub (&x, &y, &x);
-  }
-
-  /* reset y by shifting it back down */
-  fp_rshd (&y, n - t);
-
-  /* step 3. for i from n down to (t + 1) */
-  for (i = n; i >= (t + 1); i--) {
-    if (i > x.used) {
-      continue;
-    }
-
-    /* step 3.1 if xi == yt then set q{i-t-1} to b-1,
-     * otherwise set q{i-t-1} to (xi*b + x{i-1})/yt */
-    if (x.dp[i] == y.dp[t]) {
-      q.dp[i - t - 1] = ((((fp_word)1) << DIGIT_BIT) - 1);
-    } else {
-      fp_word tmp;
-      tmp = ((fp_word) x.dp[i]) << ((fp_word) DIGIT_BIT);
-      tmp |= ((fp_word) x.dp[i - 1]);
-      tmp /= ((fp_word) y.dp[t]);
-      q.dp[i - t - 1] = (fp_digit) (tmp);
-    }
-
-    /* while (q{i-t-1} * (yt * b + y{t-1})) >
-             xi * b**2 + xi-1 * b + xi-2
-
-       do q{i-t-1} -= 1;
-    */
-    q.dp[i - t - 1] = (q.dp[i - t - 1] + 1);
-    do {
-      q.dp[i - t - 1] = (q.dp[i - t - 1] - 1);
-
-      /* find left hand */
-      fp_zero (&t1);
-      t1.dp[0] = (t - 1 < 0) ? 0 : y.dp[t - 1];
-      t1.dp[1] = y.dp[t];
-      t1.used = 2;
-      fp_mul_d (&t1, q.dp[i - t - 1], &t1);
-
-      /* find right hand */
-      t2.dp[0] = (i - 2 < 0) ? 0 : x.dp[i - 2];
-      t2.dp[1] = (i - 1 < 0) ? 0 : x.dp[i - 1];
-      t2.dp[2] = x.dp[i];
-      t2.used = 3;
-    } while (fp_cmp_mag(&t1, &t2) == FP_GT);
-
-    /* step 3.3 x = x - q{i-t-1} * y * b**{i-t-1} */
-    fp_mul_d (&y, q.dp[i - t - 1], &t1);
-    fp_lshd  (&t1, i - t - 1);
-    fp_sub   (&x, &t1, &x);
-
-    /* if x < 0 then { x = x + y*b**{i-t-1}; q{i-t-1} -= 1; } */
-    if (x.sign == FP_NEG) {
-      fp_copy (&y, &t1);
-      fp_lshd (&t1, i - t - 1);
-      fp_add (&x, &t1, &x);
-      q.dp[i - t - 1] = q.dp[i - t - 1] - 1;
-    }
-  }
-
-  /* now q is the quotient and x is the remainder
-   * [which we have to normalize]
-   */
-
-  /* get sign before writing to c */
-  x.sign = x.used == 0 ? FP_ZPOS : a->sign;
-
-  if (c != NULL) {
-    fp_clamp (&q);
-    fp_copy (&q, c);
-    c->sign = neg;
-  }
-
-  if (d != NULL) {
-    fp_div_2d (&x, norm, &x, NULL);
-
-/* the following is a kludge, essentially we were seeing the right remainder but
-   with excess digits that should have been zero
- */
-    for (i = b->used; i < x.used; i++) {
-        x.dp[i] = 0;
-    }
-    fp_clamp(&x);
-    fp_copy (&x, d);
-  }
-
-  return FP_OKAY;
-*/
 }
+
+const radix_digits: &'static str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/";
+
+fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
+    where
+        D: Digit,
+        M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+        O: Ops<D, M> {
+
+    zero(out);
+
+    // make sure the radix is ok
+    if radix < 2 || radix > 64 {
+        panic!("Invalid radix");
+    }
+
+    let mut chars = text.bytes().peekable();
+
+    // if the leading digit is a minus set the sign to negative
+    let sign = if let Some(&next) = chars.peek() {
+        if next == '-' as u8 {
+            chars.next();
+            false
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    let mut tmp: Bignum<M> = Bignum::new();
+
+    // process each digit of the string
+    for c in chars {
+        // if the radix < 36 the conversion is case insensitive
+        // this allows numbers like 1AB and 1ab to represent the same  value
+        // (e.g. in hex)
+        let c = if radix <= 36 { (c as char).to_uppercase() as u8 } else { c };
+
+        let y = if let Some(pos) = radix_digits.bytes().position(|d| d == c) {
+            pos
+        } else {
+            panic!("Invalid digit");
+        };
+
+        // if the char was found in the map
+        // and is less than the given radix add it
+        // to the number, otherwise exit the loop.
+        copy(&mut tmp, out);
+        mul_d(out, &tmp, Digit::from_byte(radix as u8));
+        copy(&mut tmp, out);
+        add_d(out, &tmp, Digit::from_byte(y as u8), ops);
+    }
+
+    // set the sign only if a != 0
+    if !is_zero(out) {
+        out.pos = sign;
+    }
+}
+
+/*
+fn to_radix<D, M, O>(a: &Bignum<M>, radix: usize, ops: O) -> String
+    where
+        D: Digit,
+        M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+        O: Ops<D, M> {
+
+    // check range of the radix
+    if radix < 2 || radix > 64 {
+        panic!("Invalid radix");
+    }
+
+    let mut result: String = String::new();
+
+    // quick out if its zero
+    if is_zero(a) {
+        result.push('0');
+        return result;
+    }
+
+    let mut t: Bignum<M> = Bignum::new();
+    copy(&mut t, a);
+
+    // if it is negative output a -
+    if !t.pos {
+        result.push('-');
+        t.pos = true;
+    }
+
+    while !is_zero(&t) {
+        div_d(&mut t,
+    }
+}
+*/
+
+/*
+int fp_toradix(fp_int *a, char *str, int radix)
+{
+  int     digs;
+  fp_int  t;
+  fp_digit d;
+  char   *_s = str;
+
+  /* check range of the radix */
+  if (radix < 2 || radix > 64) {
+    return FP_VAL;
+  }
+
+  /* quick out if its zero */
+  if (fp_iszero(a) == 1) {
+     *str++ = '0';
+     *str = '\0';
+     return FP_OKAY;
+  }
+
+  fp_init_copy(&t, a);
+
+  /* if it is negative output a - */
+  if (t.sign == FP_NEG) {
+    ++_s;
+    *str++ = '-';
+    t.sign = FP_ZPOS;
+  }
+
+  digs = 0;
+  while (fp_iszero (&t) == FP_NO) {
+    fp_div_d (&t, (fp_digit) radix, &t, &d);
+    *str++ = fp_s_rmap[d];
+    ++digs;
+  }
+
+  /* reverse the digits of the string.  In this case _s points
+   * to the first digit [exluding the sign] of the number]
+   */
+  fp_reverse ((unsigned char *)_s, digs);
+
+  /* append a NULL so the string is properly terminated */
+  *str = '\0';
+  return FP_OKAY;
+}
+*/
+
 
 fn test() {
     let a: Bignum<DataU16x100> = Bignum::new();

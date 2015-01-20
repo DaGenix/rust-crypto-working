@@ -14,18 +14,21 @@ use std::fmt;
 
 // Must by Copy so that we can do byte copies
 pub trait Digit: Int + Copy + fmt::Show {
-    type Word: Word<Self>;
+    type Word; // =
 
     fn from_byte(x: u8) -> Self;
     fn to_byte(self) -> u8;
+
     fn to_word(self) -> Self::Word;
 
     fn bits() -> usize;
 }
 
 // Must by Copy so that we can do byte copies
-pub trait Word<D>: Int + Copy + fmt::Show {
-    fn to_digit(self) -> D;
+pub trait Word: Int + Copy + fmt::Show {
+    type Digit; // =
+
+    fn to_digit(self) -> Self::Digit;
 }
 
 impl Digit for u16 {
@@ -39,8 +42,27 @@ impl Digit for u16 {
     fn bits() -> usize { 16 }
 }
 
-impl Word<u16> for u32 {
+impl Digit for u8 {
+    type Word = u16;
+
+    fn from_byte(x: u8) -> u8 { x }
+    fn to_byte(self) -> u8 { self }
+
+    fn to_word(self) -> u16 { self as u16 }
+
+    fn bits() -> usize { 8 }
+}
+
+impl Word for u32 {
+    type Digit = u16;
+
     fn to_digit(self) -> u16 { self as u16 }
+}
+
+impl Word for u16 {
+    type Digit = u8;
+
+    fn to_digit(self) -> u8 { self as u8 }
 }
 
 pub trait Data: fmt::Show {
@@ -143,7 +165,7 @@ macro_rules! bignum_data(
 );
 
 bignum_data!(DataU16x100, u16, 100);
-// bignum_data!(DataU8x4, u8, 4);
+bignum_data!(DataU8x200, u8, 200);
 
 #[derive(Show)]
 pub struct Bignum<T> {
@@ -212,7 +234,7 @@ impl <T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for ZipWit
 impl <D, W, M> Ops<D, M> for GenericOps
         where
             D: Digit<Word = W>,
-            W: Word<D>,
+            W: Word<Digit = D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         let digit_bits = <D as Digit>::bits();
@@ -430,7 +452,11 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 // x = a * 2**b
-pub fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mul_2d<D, W, M>(out: &mut Bignum<M>, mut b: usize)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // let digit_bits = bits::<D>();
     let digit_bits = <D as Digit>::bits();
 
@@ -466,7 +492,7 @@ pub fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<I
 pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
         where
             D: Digit<Word = W>,
-            W: Word<D>,
+            W: Word<Digit = D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = <D as Digit>::bits();
 
@@ -667,7 +693,7 @@ pub fn div_d<D, W, M, O>(
         ops: O)
         where
             D: Digit<Word = W>,
-            W: Word<D>,
+            W: Word<Digit = D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
 
     // cannot divide by zero
@@ -741,7 +767,7 @@ pub fn div_rem<D, W, M, O>(
         ops: O)
         where
             D: Digit<Word = W>,
-            W: Word<D>,
+            W: Word<Digit = D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     if is_zero(b) {
         panic!("Divide by 0");
@@ -905,9 +931,10 @@ pub fn div_rem<D, W, M, O>(
 
 const radix_digits: &'static str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/";
 
-pub fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
+pub fn read_radix<D, W, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
     where
-        D: Digit,
+        D: Digit<Word = W>,
+        W: Word<Digit = D>,
         M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
         O: Ops<D, M> {
 
@@ -962,9 +989,10 @@ pub fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O
     }
 }
 
-pub fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
+pub fn to_radix<D, W, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
     where
-        D: Digit,
+        D: Digit<Word = W>,
+        W: Word<Digit = D>,
         M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
         O: Ops<D, M> {
 
@@ -1042,7 +1070,7 @@ mod test {
     use num::BigInt;
 
     fn mul_bignum(a_str: &str, b_str: &str) -> String {
-        type BN = Bignum<DataU16x100>;
+        type BN = Bignum<DataU8x200>;
 
         let mut a: BN = Bignum::new();
         let mut b: BN = Bignum::new();
@@ -1051,7 +1079,7 @@ mod test {
         read_radix(&mut a, a_str, 10, GenericOps);
         read_radix(&mut b, b_str, 10, GenericOps);
 
-        sub(&mut r, &a, &b, GenericOps);
+        mul(&mut r, &a, &b, GenericOps);
         println!("r: {:?}", r);
 
         let result = to_radix(&r, 10, GenericOps);
@@ -1061,7 +1089,7 @@ mod test {
     fn mul_bigint(a_str: &str, b_str: &str) -> String {
         let a: BigInt = FromStr::from_str(a_str).unwrap();
         let b: BigInt = FromStr::from_str(b_str).unwrap();
-        let c = a - b;
+        let c = a * b;
         format!("{}", c)
     }
 

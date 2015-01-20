@@ -4,23 +4,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+extern crate num;
+
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeTo, FullRange, Add, Sub, Mul, Shl, Shr};
 use std::{cmp, mem, ptr};
 use std::num::Int;
 
+use std::fmt;
+
 // Must by Copy so that we can do byte copies
-pub trait Digit: Int + Copy {
+pub trait Digit: Int + Copy + fmt::Show {
     type Word: WordOps<Self>;
 
     fn from_byte(x: u8) -> Self;
     fn to_byte(self) -> u8;
 
     fn as_word(self) -> Self::Word;
-    fn bits(self) -> usize;
+    fn bits() -> usize;
 }
 
 // Must by Copy so that we can do byte copies
-pub trait WordOps<D>: Int + Copy {
+pub trait WordOps<D>: Int + Copy + fmt::Show {
     fn shift_digit_right(self) -> Self;
     fn as_digit(self) -> D;
 }
@@ -41,7 +45,7 @@ impl Digit for u16 {
     fn to_byte(self) -> u8 { self as u8 }
 
     fn as_word(self) -> u32 { self as u32 }
-    fn bits(self) -> usize { 16 }
+    fn bits() -> usize { 16 }
 }
 
 impl WordOps<u16> for u32 {
@@ -49,7 +53,7 @@ impl WordOps<u16> for u32 {
     fn as_digit(self) -> u16 { self as u16 }
 }
 
-pub trait Data {
+pub trait Data: fmt::Show {
     type Item; //=
 
     fn new() -> Self;
@@ -81,6 +85,13 @@ macro_rules! bignum_data(
 
         impl DerefMut for $name {
             fn deref_mut(&mut self) -> &mut [$ty] { &mut self.data[..self.len] }
+        }
+
+        impl fmt::Show for $name {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(&format!("{:?}", &self[])[]);
+                Ok(())
+            }
         }
 
         impl Data for $name {
@@ -142,7 +153,9 @@ macro_rules! bignum_data(
 );
 
 bignum_data!(DataU16x100, u16, 100);
+// bignum_data!(DataU8x4, u8, 4);
 
+#[derive(Show)]
 pub struct Bignum<T> {
     pub pos: bool,
     pub data: T
@@ -227,18 +240,25 @@ impl <D, W, M> Ops<D, M> for GenericOps
 
     /// out = a - b; abs(a) >= abs(b)
     fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
-        out.data.clear();
-        let mut t: <D as Digit>::Word = Int::zero();
+        let mut t: W = Int::zero();
         let mut a_iter = a.data[].iter();
-        for (&tmpa, &tmpb) in a_iter.by_ref().zip(b.data[].iter()) {
-            t = tmpa.as_word() - tmpb.as_word() + t;
-            out.data.push(as_digit(t));
-            t = shift_digit_right(t);
+        let mut b_iter = b.data[].iter();
+        // This is similar to doing .zip() with the exception
+        // that we are guaranteed not to call .next() on a_iter
+        // after b_iter is exhausted.
+        while let Some(&tmpb) = b_iter.next() {
+            if let Some(&tmpa) = a_iter.next() {
+                t = tmpa.as_word() - (tmpb.as_word() + t);
+                out.data.push(as_digit(t));
+                t = shift_digit_right(t) & Int::one();
+            } else {
+                panic!("a has lesser magnitude than b");
+            }
         }
         for &tmpa in a_iter {
             t = tmpa.as_word() - t;
             out.data.push(as_digit(t));
-            t = shift_digit_right(t);
+            t = shift_digit_right(t) & Int::one();
         }
         clamp(out);
     }
@@ -254,7 +274,7 @@ impl <D, W, M> Ops<D, M> for GenericOps
     }
 }
 
-fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     x.data.clear();
     unsafe {
         x.data.grow_uninit(a.data.len());
@@ -266,12 +286,12 @@ fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item = D
     x.pos = a.pos;
 }
 
-fn is_zero<D, M>(a: &Bignum<M>) -> bool
+pub fn is_zero<D, M>(a: &Bignum<M>) -> bool
         where D: Digit, M: Data<Item = D> {
     a.data.is_empty()
 }
 
-fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<Item = D> {
+pub fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<Item = D> {
     a.data.clear();
     a.pos = true;
 }
@@ -417,8 +437,9 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 // x = a * 2**b
-fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
-    let digit_bits = bits::<D>();
+pub fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+    // let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     // handle whole digits
     if b >= digit_bits {
@@ -449,7 +470,7 @@ fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<Item 
 }
 
 // out = a * b
-fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
+pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
         where
             D: Digit<Word = W>,
             W: WordOps<D>,
@@ -483,7 +504,7 @@ fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
     }
 }
 
-fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // move up and truncate as required
     let old_len = a.data.len();
     let new_len = cmp::min(old_len + x, a.data.capacity());
@@ -506,7 +527,7 @@ fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = 
     clamp(a);
 }
 
-fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     // too many digits just zero and return
     if x > a.data.len() {
         zero(a);
@@ -528,7 +549,7 @@ fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = 
     clamp(a);
 }
 
-fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if a.data.len() == 0 {
         return 0;
     }
@@ -549,7 +570,7 @@ fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D> + 
 }
 
 // out = a mod 2**b
-fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     let digit_bits = bits::<D>();
 
     // zero if b is zero
@@ -700,7 +721,7 @@ pub fn div_d<D, W, M, O>(
                 w = (w << digit_bits) | a.data[ix].as_word();
                 let mut t: D;
                 if w >= b.as_word() {
-                    t = as_digit(w) / b;
+                    t = as_digit(w / b.as_word());
                     w = w - t.as_word() * b.as_word();
                 } else {
                     t = Int::zero();
@@ -891,7 +912,7 @@ pub fn div_rem<D, W, M, O>(
 
 const radix_digits: &'static str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/";
 
-fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
+pub fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
     where
         D: Digit,
         M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
@@ -922,8 +943,8 @@ fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
 
     // process each digit of the string
     for c in chars {
-        // if the radix < 36 the conversion is case insensitive
-        // this allows numbers like 1AB and 1ab to represent the same  value
+        // if the radix <= 36 the conversion is case insensitive
+        // this allows numbers like 1AB and 1ab to represent the same value
         // (e.g. in hex)
         let c = if radix <= 36 { (c as char).to_uppercase() as u8 } else { c };
 
@@ -948,8 +969,7 @@ fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
     }
 }
 
-
-fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
+pub fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
     where
         D: Digit,
         M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
@@ -980,13 +1000,18 @@ fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
     let mut d: D = Int::zero();
     let mut tmp: Bignum<M> = Bignum::new();
     while !is_zero(&t) {
+        // println!("{:?}", &t);
         copy(&mut tmp, &t);
         div_d(Some(&mut t), Some(&mut d), &tmp, Digit::from_byte(radix), ops);
+        // println!("{:?}", &t);
+        // println!("{:?}", d);
         result.push(radix_digits.as_bytes()[d.to_byte() as usize] as char);
     }
 
     // reverse the string
-    unsafe { result.as_mut_vec().reverse() };
+    unsafe {
+        result.as_mut_vec()[if a.pos { 0 } else { 1 }..].reverse()
+    };
 
     result
 }
@@ -1004,14 +1029,67 @@ fn main() {
     let mut b: BN = Bignum::new();
     let mut r: BN = Bignum::new();
 
-    read_radix(&mut a, "65534", 10, GenericOps);
-    read_radix(&mut b, "2", 10, GenericOps);
+    read_radix(&mut a, "09", 10, GenericOps);
+    read_radix(&mut b, "19", 10, GenericOps);
 
-    add(&mut r, &a, &b, GenericOps);
-
-    println!("data[0]: {}", r.data[0]);
-    println!("data[1]: {}", r.data[1]);
+    mul(&mut r, &a, &b, GenericOps);
 
     let result = to_radix(&r, 10, GenericOps);
     println!("Result: {}", &result[]);
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use std::str::FromStr;
+    use std::rand::IsaacRng;
+    use std::rand::Rng;
+
+    use num::BigInt;
+
+    fn mul_bignum(a_str: &str, b_str: &str) -> String {
+        type BN = Bignum<DataU16x100>;
+
+        let mut a: BN = Bignum::new();
+        let mut b: BN = Bignum::new();
+        let mut r: BN = Bignum::new();
+
+        read_radix(&mut a, a_str, 10, GenericOps);
+        read_radix(&mut b, b_str, 10, GenericOps);
+
+        sub(&mut r, &a, &b, GenericOps);
+        println!("r: {:?}", r);
+
+        let result = to_radix(&r, 10, GenericOps);
+        result
+    }
+
+    fn mul_bigint(a_str: &str, b_str: &str) -> String {
+        let a: BigInt = FromStr::from_str(a_str).unwrap();
+        let b: BigInt = FromStr::from_str(b_str).unwrap();
+        let c = a - b;
+        format!("{}", c)
+    }
+
+    #[test]
+    fn test1() {
+        let mut rng = IsaacRng::new_unseeded();
+        let mut a = String::new();
+        let mut b = String::new();
+        for _ in (0..100) {
+            a.clear();
+            b.clear();
+            for _ in (0..100) {
+                a.push(('0' as u8 + rng.gen_range(0, 10)) as char);
+                b.push(('0' as u8 + rng.gen_range(0, 10)) as char);
+                println!("{} * {}", a, b);
+                let bigint_result = mul_bigint(&a[], &b[]);
+                let bignum_result = mul_bignum(&a[], &b[]);
+                println!("bigint: {}", bigint_result);
+                println!("bignum: {}", bignum_result);
+                assert!(bigint_result == bignum_result);
+            }
+        }
+    }
 }

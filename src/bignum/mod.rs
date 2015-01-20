@@ -14,28 +14,18 @@ use std::fmt;
 
 // Must by Copy so that we can do byte copies
 pub trait Digit: Int + Copy + fmt::Show {
-    type Word: WordOps<Self>;
+    type Word: Word<Self>;
 
     fn from_byte(x: u8) -> Self;
     fn to_byte(self) -> u8;
+    fn to_word(self) -> Self::Word;
 
-    fn as_word(self) -> Self::Word;
     fn bits() -> usize;
 }
 
 // Must by Copy so that we can do byte copies
-pub trait WordOps<D>: Int + Copy + fmt::Show {
-    fn shift_digit_right(self) -> Self;
-    fn as_digit(self) -> D;
-}
-
-// Helper functions to call WordOps methods since it looks
-// like a Rust bug is preventing method syntax from working.
-fn as_digit<D, W: WordOps<D>>(w: W) -> D { w.as_digit() }
-fn shift_digit_right<D, W: WordOps<D>>(w: W) -> W { w.shift_digit_right() }
-
-fn bits<T>() -> usize {
-    mem::size_of::<T>() * 8
+pub trait Word<D>: Int + Copy + fmt::Show {
+    fn to_digit(self) -> D;
 }
 
 impl Digit for u16 {
@@ -44,13 +34,13 @@ impl Digit for u16 {
     fn from_byte(x: u8) -> u16 { x as u16 }
     fn to_byte(self) -> u8 { self as u8 }
 
-    fn as_word(self) -> u32 { self as u32 }
+    fn to_word(self) -> u32 { self as u32 }
+
     fn bits() -> usize { 16 }
 }
 
-impl WordOps<u16> for u32 {
-    fn shift_digit_right(self) -> u32 { self >> 16 }
-    fn as_digit(self) -> u16 { self as u16 }
+impl Word<u16> for u32 {
+    fn to_digit(self) -> u16 { self as u16 }
 }
 
 pub trait Data: fmt::Show {
@@ -222,24 +212,26 @@ impl <T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for ZipWit
 impl <D, W, M> Ops<D, M> for GenericOps
         where
             D: Digit<Word = W>,
-            W: WordOps<D>,
+            W: Word<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+        let digit_bits = <D as Digit>::bits();
         out.data.clear();
-        let mut t: <D as Digit>::Word = Int::zero();
+        let mut t: W = Int::zero();
         for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[].iter(), b.data[].iter()) {
-            t = t + tmpa.as_word() + tmpb.as_word();
-            out.data.push(as_digit(t));
-            t = shift_digit_right(t);
+            t = t + tmpa.to_word() + tmpb.to_word();
+            out.data.push(t.to_digit());
+            t = t >> digit_bits;
         }
         if t != Int::zero() {
-            out.data.push(as_digit(t));
+            out.data.push(t.to_digit());
         }
         clamp(out);
     }
 
     /// out = a - b; abs(a) >= abs(b)
     fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
+        let digit_bits = <D as Digit>::bits();
         let mut t: W = Int::zero();
         let mut a_iter = a.data[].iter();
         let mut b_iter = b.data[].iter();
@@ -248,28 +240,29 @@ impl <D, W, M> Ops<D, M> for GenericOps
         // after b_iter is exhausted.
         while let Some(&tmpb) = b_iter.next() {
             if let Some(&tmpa) = a_iter.next() {
-                t = tmpa.as_word() - (tmpb.as_word() + t);
-                out.data.push(as_digit(t));
-                t = shift_digit_right(t) & Int::one();
+                t = tmpa.to_word() - (tmpb.to_word() + t);
+                out.data.push(t.to_digit());
+                t = (t >> digit_bits) & Int::one();
             } else {
                 panic!("a has lesser magnitude than b");
             }
         }
         for &tmpa in a_iter {
-            t = tmpa.as_word() - t;
-            out.data.push(as_digit(t));
-            t = shift_digit_right(t) & Int::one();
+            t = tmpa.to_word() - t;
+            out.data.push(t.to_digit());
+            t = (t >> digit_bits) & Int::one();
         }
         clamp(out);
     }
 
     fn muladd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D) {
+        let digit_bits = <D as Digit>::bits();
         let mut t: <D as Digit>::Word;
-        t = c0.as_word() + i.as_word() * j.as_word();
-        c0 = as_digit(t);
-        t = c1.as_word() + shift_digit_right(t);
-        c1 = as_digit(t);
-        c2 = c2 + as_digit(shift_digit_right(t));
+        t = c0.to_word() + i.to_word() * j.to_word();
+        c0 = t.to_digit();
+        t = c1.to_word() + (t >> digit_bits);
+        c1 = t.to_digit();
+        c2 = c2 + (t >> digit_bits).to_digit();
         (c0, c1, c2)
     }
 }
@@ -473,27 +466,27 @@ pub fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: Data<I
 pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
         where
             D: Digit<Word = W>,
-            W: WordOps<D>,
+            W: Word<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     let old_len = out.data.len();
     out.data.clear();
     unsafe {
         out.data.grow_uninit(a.data.len());
         out.pos = a.pos;
-        let mut w: <D as Digit>::Word = Int::zero();
+        let mut w: W = Int::zero();
         let mut x: usize = 0;
         while x < a.data.len() {
-            w = a.data[x].as_word() * b.as_word() + w;
-            out.data[x] = as_digit(w);
+            w = a.data[x].to_word() * b.to_word() + w;
+            out.data[x] = w.to_digit();
             w = w >> digit_bits;
             x += 1;
         }
         if w != Int::zero() && a.data.len() < a.data.capacity() {
             let tmp = out.data.len();
             out.data.grow_uninit(1);
-            out.data[tmp] = as_digit(w);
+            out.data[tmp] = w.to_digit();
             x += 1;
         }
         while x < old_len {
@@ -554,7 +547,7 @@ pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D
         return 0;
     }
 
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     // get number of digits and add that
     let mut r = (a.data.len() - 1) * digit_bits;
@@ -571,7 +564,7 @@ pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D
 
 // out = a mod 2**b
 pub fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     // zero if b is zero
     if b == 0 {
@@ -606,7 +599,7 @@ pub fn div_2d<D, M>(
         a: &Bignum<M>,
         b: usize)
         where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     // if the shift count is == 0 then we do no work
     if b == 0 {
@@ -656,7 +649,7 @@ fn is_power_of_two<D>(b: D) -> (bool, Option<usize>) where D: Digit {
         return (false, None);
     }
 
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
     for x in (0..digit_bits) {
         let one: D = Int::one();
         if b == one << x {
@@ -674,7 +667,7 @@ pub fn div_d<D, W, M, O>(
         ops: O)
         where
             D: Digit<Word = W>,
-            W: WordOps<D>,
+            W: Word<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
 
     // cannot divide by zero
@@ -696,7 +689,7 @@ pub fn div_d<D, W, M, O>(
     // power of two ?
     let result = is_power_of_two(b);
 
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     if let (true, Some(pos)) = result {
         // power of two
@@ -718,11 +711,11 @@ pub fn div_d<D, W, M, O>(
             let mut w: W = Int::zero();
             let mut t: D;
             for ix in (0..a.data.len()).rev() {
-                w = (w << digit_bits) | a.data[ix].as_word();
+                w = (w << digit_bits) | a.data[ix].to_word();
                 let mut t: D;
-                if w >= b.as_word() {
-                    t = as_digit(w / b.as_word());
-                    w = w - t.as_word() * b.as_word();
+                if w >= b.to_word() {
+                    t = (w / b.to_word()).to_digit();
+                    w = w - t.to_word() * b.to_word();
                 } else {
                     t = Int::zero();
                 }
@@ -730,7 +723,7 @@ pub fn div_d<D, W, M, O>(
             }
 
             if let Some(rem) = remainder {
-                *rem = as_digit(w);
+                *rem = w.to_digit();
             }
             if let Some(quot) = quotient {
                 clamp(&mut q);
@@ -748,7 +741,7 @@ pub fn div_rem<D, W, M, O>(
         ops: O)
         where
             D: Digit<Word = W>,
-            W: WordOps<D>,
+            W: Word<D>,
             M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
     if is_zero(b) {
         panic!("Divide by 0");
@@ -765,7 +758,7 @@ pub fn div_rem<D, W, M, O>(
         return;
     }
 
-    let digit_bits = bits::<D>();
+    let digit_bits = <D as Digit>::bits();
 
     let neg = a.pos == b.pos;
 
@@ -832,10 +825,10 @@ pub fn div_rem<D, W, M, O>(
                 let zero: D = Int::zero();
                 q.data[i - t - 1] = !zero;
             } else {
-                let mut tmpword = x.data[i].as_word() << digit_bits;
-                tmpword = tmpword | x.data[i - 1].as_word();
-                tmpword = tmpword / y.data[t].as_word();
-                q.data[i - t - 1] = as_digit(tmpword);
+                let mut tmpword = x.data[i].to_word() << digit_bits;
+                tmpword = tmpword | x.data[i - 1].to_word();
+                tmpword = tmpword / y.data[t].to_word();
+                q.data[i - t - 1] = tmpword.to_digit();
             }
 
             /* while (q{i-t-1} * (yt * b + y{t-1})) >

@@ -101,8 +101,7 @@ macro_rules! bignum_data(
 
         impl fmt::Show for $name {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str(&format!("{:?}", &self[])[]);
-                Ok(())
+                self[].fmt(f)
             }
         }
 
@@ -196,6 +195,8 @@ pub trait Ops<D, M>: Copy {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
     fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>);
     fn muladd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D);
+    fn sqradd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D);
+    fn sqradd2(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D);
 }
 
 #[derive(Copy)]
@@ -285,6 +286,35 @@ impl <D, W, M> Ops<D, M> for GenericOps
         t = c1.to_word() + (t >> digit_bits);
         c1 = t.to_digit();
         c2 = c2 + (t >> digit_bits).to_digit();
+        (c0, c1, c2)
+    }
+
+    // multiplies point i and j, updates carry "c1" and digit c2
+    fn sqradd(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D) {
+        let digit_bits = <D as Digit>::bits();
+        let mut t = c0.to_word() + (i.to_word() * j.to_word());
+        c0 = t.to_digit();
+        t = c1.to_word() + (t >> digit_bits);
+        c1 = t.to_digit();
+        c2 = c2 + (t >> digit_bits).to_digit();
+        (c0, c1, c2)
+    }
+
+
+    // for squaring some of the terms are doubled...
+    fn sqradd2(&self, i: D, j: D, mut c0: D, mut c1: D, mut c2: D) -> (D, D, D) {
+        let digit_bits = <D as Digit>::bits();
+        let t = i.to_word() * j.to_word();
+        let mut tt = c0.to_word() + t;
+        c0 = tt.to_digit();
+        tt = c1.to_word() + (tt >> digit_bits);
+        c1 = tt.to_digit();
+        c2 = c2 + (tt >> digit_bits).to_digit();
+        tt = c0.to_word() + t;
+        c0 = tt.to_digit();
+        tt = c1.to_word() + (tt >> digit_bits);
+        c1 = tt.to_digit();
+        c2 = c2 + (tt >> digit_bits).to_digit();
         (c0, c1, c2)
     }
 }
@@ -1037,6 +1067,372 @@ pub fn to_radix<D, W, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
     result
 }
 
+// c = a mod b, 0 <= c < b
+pub fn _mod<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+            O: Ops<D, M> {
+    let mut t: Bignum<M> = Bignum::new();
+    div_rem(None, Some(&mut t), a, b, ops);
+    if t.pos != b.pos {
+        add(out, &t, b, ops);
+    } else {
+        copy(out, &t);
+    }
+}
+
+// d = a * b (mod c)
+pub fn mulmod<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, c: &Bignum<M>, ops: O)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+            O: Ops<D, M> {
+    let mut tmp: Bignum<M> = Bignum::new();
+    mul(&mut tmp, a, b, ops);
+    _mod(out, &tmp, c, ops);
+}
+
+// generic comba squarer
+pub fn sqr<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, ops: O)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+            O: Ops<D, M> {
+    // get size of output and trim
+    let pa = a.data.len() * 2;
+    let pa = if pa >= a.data.capacity() {
+        a.data.capacity() - 1
+    } else {
+        pa
+    };
+
+    let mut c0: D = Int::zero();
+    let mut c1: D = Int::zero();
+    let mut c2: D = Int::zero();
+
+    unsafe {
+        zero(out);
+        out.data.grow_uninit(pa);
+
+        for ix in (0..pa) {
+            // get offsets into the two bignums
+            let ty = cmp::min(a.data.len() - 1, ix);
+            let tx = ix - ty;
+
+            // setup temp aliases
+            let mut tmpx = a.data.as_ptr().offset(tx as isize);
+            let mut tmpy = a.data.as_ptr().offset(ty as isize);
+
+            // this is the number of times the loop will iterrate:
+            // while tx++ < a->used && ty-- >= 0 { ... }
+            let mut iy = cmp::min(a.data.len() - tx, ty + 1);
+
+            // now for squaring tx can never equal ty
+            // we halve the distance since they approach
+            // at a rate of 2x and we have to round because
+            // odd cases need to be executed
+            iy = cmp::min(iy, (ty - tx + 1) >> 1);
+
+            // forward carries
+            c0 = c1;
+            c1 = c2;
+            c2 = Int::zero();
+
+            // execute loop
+            for iz in (0..iy) {
+                let (_c0, _c1, _c2) = ops.sqradd2(*tmpx, *tmpy, c0, c1, c2);
+                c0 = _c0;
+                c1 = _c1;
+                c2 = _c2;
+                tmpx = tmpx.offset(1);
+                tmpy = tmpy.offset(-1);
+            }
+
+            // even columns have the square term in them
+            if ix % 2 == 0 {
+                let (_c0, _c1, _c2) = ops.sqradd(a.data[ix / 2], a.data[ix / 2], c0, c1, c2);
+                c0 = _c0;
+                c1 = _c1;
+                c2 = _c2;
+            }
+
+            // store it
+            out.data[ix] = c0;
+        }
+    }
+
+    clamp(out);
+}
+
+// setup the montgomery reduction
+pub fn montgomery_setup<D, W, M, O>(a: &mut Bignum<M>, rho: &mut D, ops: O)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+            O: Ops<D, M> {
+    let digit_bits = <D as Digit>::bits();
+
+    let one: D = Int::one();
+    let two: D = one + one;
+    let four: D = two + two;
+
+    /* fast inversion mod 2**k
+    *
+    * Based on the fact that
+    *
+    * XA = 1 (mod 2**n)  =>  (X(2-XA)) A = 1 (mod 2**2n)
+    *                    =>  2*X*A - X*X*A*A = 1
+    *                    =>  2*(1) - (1)     = 1
+    */
+    let b = a.data[0];
+
+    if b % two == Int::zero() {
+        panic!("Invalid value");
+    }
+
+    // here x * a == 1 mod 2**4
+    let mut x = (((b + two) & four) << 1) + b;
+
+    // here x * a == 1 mod 2**8
+    x = x * (two - b * x);
+
+    // here x * a == 1 mod 2**16
+    if digit_bits >= 16 {
+        x = x * (two - b * x);
+    }
+    // here x * a == 1 mod 2**32
+    if digit_bits >= 32 {
+        x = x * (two - b * x);
+    }
+    // here x * a == 1 mod 2**64
+    if digit_bits == 64 {
+        x = x * (two - b * x);
+    }
+    if digit_bits > 64 {
+        panic!("Can't handle digits bigger than 64 bits");
+    }
+
+    *rho = ((one.to_word() << digit_bits) - x.to_word()).to_digit();
+}
+
+// computes a = 2**b
+pub fn twoexpt<D, W, M>(out: &mut Bignum<M>, b: usize)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+    let digit_bits = <D as Digit>::bits();
+
+    // zero a as per default
+    zero(out);
+
+    let z = b / digit_bits;
+    if z >= digit_bits {
+        return;
+    }
+
+    unsafe {
+        // set the used count of where the bit will go
+        out.data.grow_uninit(z + 1);
+
+        for x in out.data.iter_mut().take(z) {
+            *x = Int::zero();
+        }
+
+        // put the single bit in its place
+        let one: D = Int::one();
+        out.data[z] = one << (b % digit_bits);
+    }
+}
+
+// out = 2 * b
+pub fn mul_2<D, W, M>(a: &mut Bignum<M>)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+    let digit_bits = <D as Digit>::bits();
+
+    let mut carry: D = Int::zero();
+    for digit in a.data[].iter_mut() {
+        let next_carry = *digit >> (digit_bits - 1);
+        *digit = (*digit << 1) | carry;
+        carry = next_carry;
+    }
+    if carry != Int::zero() {
+        a.data.push(carry);
+    }
+}
+
+pub fn set<D, W, M>(out: &mut Bignum<M>, d: D)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+    out.pos = true;
+    out.data.clear();
+    out.data.push(d);
+}
+
+// computes a = B**n mod b without division or multiplication useful for
+// normalizing numbers in a Montgomery system.
+pub fn montgomery_calc_normalization<D, W, M, O>(a: &mut Bignum<M>, b: &Bignum<M>, ops: O)
+        where
+            D: Digit<Word = W>,
+            W: Word<Digit = D>,
+            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
+            O: Ops<D, M> {
+    let digit_bits = <D as Digit>::bits();
+
+    // how many bits of last digit does b use
+    let mut bits = count_bits(b) % digit_bits;
+    if bits == 0 {
+        bits = digit_bits;
+    }
+
+    // compute A = B^(n-1) * 2^(bits-1)
+    if b.data.len() > 1 {
+        twoexpt(a, (b.data.len() - 1) * digit_bits + bits - 1);
+    } else {
+        set(a, Int::one());
+        bits = 1;
+    }
+
+    // now compute C = A * B mod b
+    for x in (bits - 1..digit_bits) {
+        mul_2(a);
+        if cmp_mag(a, b) >= 0 {
+            let mut tmp: Bignum<M> = Bignum::new();
+            copy(&mut tmp, a);
+            ops.unsigned_sub(a, &tmp, b);
+        }
+    }
+}
+
+/*
+
+/* ISO C code */
+#define MONT_START
+#define MONT_FINI
+#define LOOP_END
+#define LOOP_START \
+   mu = c[x] * mp
+
+#define INNERMUL                                      \
+   do { fp_word t;                                    \
+   _c[0] = t  = ((fp_word)_c[0] + (fp_word)cy) +      \
+                (((fp_word)mu) * ((fp_word)*tmpm++)); \
+   cy = (t >> DIGIT_BIT);                             \
+   } while (0)
+
+#define PROPCARRY \
+   do { fp_digit t = _c[0] += cy; cy = (t < cy); } while (0)
+
+#endif
+/******************************************************************/
+
+
+#define LO  0
+
+#ifdef TFM_SMALL_MONT_SET
+#include "fp_mont_small.i"
+#endif
+
+/* computes x/R == x (mod N) via Montgomery Reduction */
+void fp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp)
+{
+   fp_digit c[FP_SIZE], *_c, *tmpm, mu;
+   int      oldused, x, y, pa;
+
+   /* bail if too large */
+   if (m->used > (FP_SIZE/2)) {
+      return;
+   }
+
+#ifdef TFM_SMALL_MONT_SET
+   if (m->used <= 16) {
+      fp_montgomery_reduce_small(a, m, mp);
+      return;
+   }
+#endif
+
+#if defined(USE_MEMSET)
+   /* now zero the buff */
+   memset(c, 0, sizeof c);
+#endif
+   pa = m->used;
+
+   /* copy the input */
+   oldused = a->used;
+   for (x = 0; x < oldused; x++) {
+       c[x] = a->dp[x];
+   }
+#if !defined(USE_MEMSET)
+   for (; x < 2*pa+1; x++) {
+       c[x] = 0;
+   }
+#endif
+   MONT_START;
+
+   for (x = 0; x < pa; x++) {
+       fp_digit cy = 0;
+       /* get Mu for this round */
+       LOOP_START;
+       _c   = c + x;
+       tmpm = m->dp;
+       y = 0;
+       #if defined(INNERMUL8)
+        for (; y < (pa & ~7); y += 8) {
+              INNERMUL8;
+              _c   += 8;
+              tmpm += 8;
+           }
+       #endif
+
+       for (; y < pa; y++) {
+          INNERMUL;
+          ++_c;
+       }
+       LOOP_END;
+       while (cy) {
+           PROPCARRY;
+           ++_c;
+       }
+  }
+
+  /* now copy out */
+  _c   = c + pa;
+  tmpm = a->dp;
+  for (x = 0; x < pa+1; x++) {
+     *tmpm++ = *_c++;
+  }
+
+  for (; x < oldused; x++)   {
+     *tmpm++ = 0;
+  }
+
+  MONT_FINI;
+
+  a->used = pa+1;
+  fp_clamp(a);
+
+  /* if A >= m then A = A - m */
+  if (fp_cmp_mag (a, m) != FP_LT) {
+    s_fp_sub (a, m, a);
+  }
+}
+
+*/
+
+
+
+
+
 fn main() {
 //    let a: Bignum<DataU16x100> = Bignum::new();
 //    let b: Bignum<DataU16x100> = Bignum::new();
@@ -1050,12 +1446,14 @@ fn main() {
     let mut b: BN = Bignum::new();
     let mut r: BN = Bignum::new();
 
-    read_radix(&mut a, "09", 10, GenericOps);
-    read_radix(&mut b, "19", 10, GenericOps);
+    read_radix(&mut a, "33000", 10, GenericOps);
+    // read_radix(&mut b, "19", 10, GenericOps);
 
-    mul(&mut r, &a, &b, GenericOps);
+    // mul(&mut r, &a, &b, GenericOps);
+    // sqr(&mut r, &a, GenericOps);
+    mul_2(&mut a);
 
-    let result = to_radix(&r, 10, GenericOps);
+    let result = to_radix(&a, 10, GenericOps);
     println!("Result: {}", &result[]);
 }
 

@@ -6,14 +6,13 @@
 
 extern crate num;
 
-use std::ops::{Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeTo, FullRange, Add, Sub, Mul, Shl, Shr};
 use std::{cmp, mem, ptr};
+use std::fmt::{self, Display};
 use std::num::Int;
-
-use std::fmt;
+use std::ops::{Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeTo, RangeFull, Add, Sub, Mul, Shl, Shr};
 
 // Must by Copy so that we can do byte copies
-pub trait Digit: Int + Copy + fmt::Show {
+pub trait Digit: Int + Copy + fmt::Display {
     type Word; // =
 
     fn from_byte(x: u8) -> Self;
@@ -25,7 +24,7 @@ pub trait Digit: Int + Copy + fmt::Show {
 }
 
 // Must by Copy so that we can do byte copies
-pub trait Word: Int + Copy + fmt::Show {
+pub trait Word: Int + Copy + fmt::Display {
     type Digit; // =
 
     fn to_digit(self) -> Self::Digit;
@@ -65,7 +64,7 @@ impl Word for u16 {
     fn to_digit(self) -> u8 { self as u8 }
 }
 
-pub trait Data: fmt::Show {
+pub trait Data {
     type Item; //=
 
     fn new() -> Self;
@@ -97,12 +96,6 @@ macro_rules! bignum_data(
 
         impl DerefMut for $name {
             fn deref_mut(&mut self) -> &mut [$ty] { &mut self.data[..self.len] }
-        }
-
-        impl fmt::Show for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                self[].fmt(f)
-            }
         }
 
         impl Data for $name {
@@ -166,7 +159,7 @@ macro_rules! bignum_data(
 bignum_data!(DataU16x100, u16, 100);
 bignum_data!(DataU8x200, u8, 200);
 
-#[derive(Show)]
+#[derive(Debug)]
 pub struct Bignum<T> {
     pub pos: bool,
     pub data: T
@@ -182,7 +175,7 @@ impl <M: Data> Bignum<M> {
 }
 
 pub fn clamp<D, M>(x: &mut Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> {
-    while x.data[].last().map_or(false, |&tmp| tmp == Int::zero()) {
+    while x.data[..].last().map_or(false, |&tmp| tmp == Int::zero()) {
         x.data.pop();
     }
     if x.data.is_empty() {
@@ -241,7 +234,7 @@ impl <D, W, M> Ops<D, M> for GenericOps
         let digit_bits = <D as Digit>::bits();
         out.data.clear();
         let mut t: W = Int::zero();
-        for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[].iter(), b.data[].iter()) {
+        for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[..].iter(), b.data[..].iter()) {
             t = t + tmpa.to_word() + tmpb.to_word();
             out.data.push(t.to_digit());
             t = t >> digit_bits;
@@ -256,8 +249,8 @@ impl <D, W, M> Ops<D, M> for GenericOps
     fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         let digit_bits = <D as Digit>::bits();
         let mut t: W = Int::zero();
-        let mut a_iter = a.data[].iter();
-        let mut b_iter = b.data[].iter();
+        let mut a_iter = a.data[..].iter();
+        let mut b_iter = b.data[..].iter();
         // This is similar to doing .zip() with the exception
         // that we are guaranteed not to call .next() on a_iter
         // after b_iter is exhausted.
@@ -324,8 +317,8 @@ pub fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item
     unsafe {
         x.data.grow_uninit(a.data.len());
         ptr::copy_nonoverlapping_memory(
-            x.data[].as_mut_ptr(),
-            a.data[].as_ptr(),
+            x.data[..].as_mut_ptr(),
+            a.data[..].as_ptr(),
             a.data.len());
     }
     x.pos = a.pos;
@@ -342,14 +335,14 @@ pub fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<Item = D> {
 }
 
 /// Unsigned comparison
-pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
+pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
         where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if a.data.len() > b.data.len() {
         return 1;
     } else if a.data.len() < b.data.len() {
         return -1;
     } else {
-        for (&tmpa, &tmpb) in a.data[].iter().rev().zip(b.data[].iter().rev()) {
+        for (&tmpa, &tmpb) in a.data[..].iter().rev().zip(b.data[..].iter().rev()) {
             if tmpa > tmpb {
                 return 1
             } else if tmpa < tmpb {
@@ -361,7 +354,7 @@ pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
 }
 
 /// Signed comparison
-pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> int
+pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
         where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
     if !a.pos && b.pos {
         return -1;
@@ -460,8 +453,8 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
         c1 = c2;
         c2 = Int::zero();
 
-        let mut tmpx = unsafe { a.data.as_ptr().offset(tx as int) };
-        let mut tmpy = unsafe { b.data.as_ptr().offset(ty as int) };
+        let mut tmpx = unsafe { a.data.as_ptr().offset(tx as isize) };
+        let mut tmpy = unsafe { b.data.as_ptr().offset(ty as isize) };
         for _ in range(0, iy) {
             unsafe {
                 let (_c0, _c1, _c2) = ops.muladd(*tmpx, *tmpy, c0, c1, c2);
@@ -473,7 +466,7 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
             }
         }
 
-        unsafe { *out.data.as_mut_ptr().offset(ix as int) = c0; }
+        unsafe { *out.data.as_mut_ptr().offset(ix as isize) = c0; }
     }
 
     out.pos = a.pos == b.pos;
@@ -1259,7 +1252,7 @@ pub fn mul_2<D, W, M>(a: &mut Bignum<M>)
     let digit_bits = <D as Digit>::bits();
 
     let mut carry: D = Int::zero();
-    for digit in a.data[].iter_mut() {
+    for digit in a.data[..].iter_mut() {
         let next_carry = *digit >> (digit_bits - 1);
         *digit = (*digit << 1) | carry;
         carry = next_carry;
@@ -1454,7 +1447,7 @@ fn main() {
     mul_2(&mut a);
 
     let result = to_radix(&a, 10, GenericOps);
-    println!("Result: {}", &result[]);
+    println!("Result: {}", &result[..]);
 }
 
 #[cfg(test)]
@@ -1503,8 +1496,8 @@ mod test {
                 a.push(('0' as u8 + rng.gen_range(0, 10)) as char);
                 b.push(('0' as u8 + rng.gen_range(0, 10)) as char);
                 println!("{} * {}", a, b);
-                let bigint_result = mul_bigint(&a[], &b[]);
-                let bignum_result = mul_bignum(&a[], &b[]);
+                let bigint_result = mul_bigint(&a[..], &b[..]);
+                let bignum_result = mul_bignum(&a[..], &b[..]);
                 println!("bigint: {}", bigint_result);
                 println!("bignum: {}", bignum_result);
                 assert!(bigint_result == bignum_result);

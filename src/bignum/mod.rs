@@ -9,11 +9,11 @@ extern crate num;
 use std::{cmp, mem, ptr};
 use std::fmt::{self, Display};
 use std::num::Int;
-use std::ops::{Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeTo, RangeFull, Add, Sub, Mul, Shl, Shr};
+use std::ops::{Deref, DerefMut, Add, Sub, Mul, Shl, Shr};
 
 // Must by Copy so that we can do byte copies
 pub trait Digit: Int + Copy + fmt::Display {
-    type Word; // =
+    type Word: Word<Digit = Self>;
 
     fn from_byte(x: u8) -> Self;
     fn to_byte(self) -> u8;
@@ -25,7 +25,7 @@ pub trait Digit: Int + Copy + fmt::Display {
 
 // Must by Copy so that we can do byte copies
 pub trait Word: Int + Copy + fmt::Display {
-    type Digit; // =
+    type Digit: Digit<Word = Self>;
 
     fn to_digit(self) -> Self::Digit;
 }
@@ -80,6 +80,8 @@ pub trait Data {
     fn as_ptr(&self) -> *const Self::Item;
     fn as_mut_ptr(&mut self) -> *mut Self::Item;
 }
+
+pub trait DigitVec<D>: Data<Item = D> + Deref<Target = [D]> + DerefMut { }
 
 #[macro_export]
 macro_rules! bignum_data(
@@ -153,6 +155,8 @@ macro_rules! bignum_data(
                 self.data.as_mut_ptr()
             }
         }
+
+        impl DigitVec<$ty> for $name { }
     }
 );
 
@@ -160,12 +164,12 @@ bignum_data!(DataU16x100, u16, 100);
 bignum_data!(DataU8x200, u8, 200);
 
 #[derive(Debug)]
-pub struct Bignum<T> {
+pub struct Bignum<M> {
     pub pos: bool,
-    pub data: T
+    pub data: M
 }
 
-impl <M: Data> Bignum<M> {
+impl <M> Bignum<M> where M: Data {
     pub fn new() -> Bignum<M> {
         Bignum {
             pos: true,
@@ -174,7 +178,7 @@ impl <M: Data> Bignum<M> {
     }
 }
 
-pub fn clamp<D, M>(x: &mut Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> {
+pub fn clamp<D, M>(x: &mut Bignum<M>) where D: Digit, M: DigitVec<D> {
     while x.data[..].last().map_or(false, |&tmp| tmp == Int::zero()) {
         x.data.pop();
     }
@@ -225,15 +229,11 @@ impl <T: Copy, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for ZipWit
     }
 }
 
-impl <D, W, M> Ops<D, M> for GenericOps
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+impl <D, M> Ops<D, M> for GenericOps where D: Digit, M: DigitVec<D> {
     fn unsigned_add(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         let digit_bits = <D as Digit>::bits();
         out.data.clear();
-        let mut t: W = Int::zero();
+        let mut t: <D as Digit>::Word = Int::zero();
         for (&tmpa, &tmpb) in zip_with_default(&Int::zero(), a.data[..].iter(), b.data[..].iter()) {
             t = t + tmpa.to_word() + tmpb.to_word();
             out.data.push(t.to_digit());
@@ -248,7 +248,7 @@ impl <D, W, M> Ops<D, M> for GenericOps
     /// out = a - b; abs(a) >= abs(b)
     fn unsigned_sub(&self, out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>) {
         let digit_bits = <D as Digit>::bits();
-        let mut t: W = Int::zero();
+        let mut t: <D as Digit>::Word = Int::zero();
         let mut a_iter = a.data[..].iter();
         let mut b_iter = b.data[..].iter();
         // This is similar to doing .zip() with the exception
@@ -430,7 +430,7 @@ pub fn sub<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let mut c0;
     let mut c1: D = Int::zero();
     let mut c2: D = Int::zero();
@@ -475,11 +475,7 @@ pub fn mul<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 // x = a * 2**b
-pub fn mul_2d<D, W, M>(out: &mut Bignum<M>, mut b: usize)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mul_2d<D, M>(out: &mut Bignum<M>, mut b: usize) where D: Digit, M: DigitVec<D> {
     // let digit_bits = bits::<D>();
     let digit_bits = <D as Digit>::bits();
 
@@ -512,11 +508,7 @@ pub fn mul_2d<D, W, M>(out: &mut Bignum<M>, mut b: usize)
 }
 
 // out = a * b
-pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mul_d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D) where D: Digit, M: DigitVec<D> {
     let digit_bits = <D as Digit>::bits();
 
     let old_len = out.data.len();
@@ -524,7 +516,7 @@ pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
     unsafe {
         out.data.grow_uninit(a.data.len());
         out.pos = a.pos;
-        let mut w: W = Int::zero();
+        let mut w: <D as Digit>::Word = Int::zero();
         let mut x: usize = 0;
         while x < a.data.len() {
             w = a.data[x].to_word() * b.to_word() + w;
@@ -546,7 +538,7 @@ pub fn mul_d<D, W, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: D)
     }
 }
 
-pub fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: DigitVec<D> {
     // move up and truncate as required
     let old_len = a.data.len();
     let new_len = cmp::min(old_len + x, a.data.capacity());
@@ -569,7 +561,7 @@ pub fn lsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Ite
     clamp(a);
 }
 
-pub fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: DigitVec<D> {
     // too many digits just zero and return
     if x > a.data.len() {
         zero(a);
@@ -591,7 +583,7 @@ pub fn rsh_digits<D, M>(a: &mut Bignum<M>, x: usize) where D: Digit, M: Data<Ite
     clamp(a);
 }
 
-pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: DigitVec<D> {
     if a.data.len() == 0 {
         return 0;
     }
@@ -612,7 +604,7 @@ pub fn count_bits<D, M>(a: &Bignum<M>) -> usize where D: Digit, M: Data<Item = D
 }
 
 // out = a mod 2**b
-pub fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mod_2d<D, M>(out: &mut Bignum<M>, a: &Bignum<M>, b: usize) where D: Digit, M: DigitVec<D> {
     let digit_bits = <D as Digit>::bits();
 
     // zero if b is zero
@@ -646,8 +638,7 @@ pub fn div_2d<D, M>(
         quotient: &mut Bignum<M>,
         remainder: Option<&mut Bignum<M>>,
         a: &Bignum<M>,
-        b: usize)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+        b: usize) where D: Digit, M: DigitVec<D> {
     let digit_bits = <D as Digit>::bits();
 
     // if the shift count is == 0 then we do no work
@@ -708,17 +699,12 @@ fn is_power_of_two<D>(b: D) -> (bool, Option<usize>) where D: Digit {
     return (false, None);
 }
 
-pub fn div_d<D, W, M, O>(
+pub fn div_d<D, M, O>(
         quotient: Option<&mut Bignum<M>>,
         remainder: Option<&mut D>,
         a: &Bignum<M>,
         b: D,
-        ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
-
+        ops: O) where D: Digit, M: DigitVec<D>, O: Ops<D, M> { 
     // cannot divide by zero
     if b == Int::zero() {
         panic!("Divide by 0");
@@ -757,7 +743,7 @@ pub fn div_d<D, W, M, O>(
             q.data.grow_uninit(a.data.len());
             q.pos = a.pos;
 
-            let mut w: W = Int::zero();
+            let mut w: <D as Digit>::Word = Int::zero();
             let mut t: D;
             for ix in (0..a.data.len()).rev() {
                 w = (w << digit_bits) | a.data[ix].to_word();
@@ -782,16 +768,13 @@ pub fn div_d<D, W, M, O>(
     }
 }
 
-pub fn div_rem<D, W, M, O>(
+pub fn div_rem<D, M, O>(
         quotient: Option<&mut Bignum<M>>,
         remainder: Option<&mut Bignum<M>>,
         a: &Bignum<M>,
         b: &Bignum<M>,
         ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     if is_zero(b) {
         panic!("Divide by 0");
     }
@@ -954,13 +937,8 @@ pub fn div_rem<D, W, M, O>(
 
 const radix_digits: &'static str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/";
 
-pub fn read_radix<D, W, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
-    where
-        D: Digit<Word = W>,
-        W: Word<Digit = D>,
-        M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-        O: Ops<D, M> {
-
+pub fn read_radix<D, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     zero(out);
 
     // make sure the radix is ok
@@ -1012,13 +990,8 @@ pub fn read_radix<D, W, M, O>(out: &mut Bignum<M>, text: &str, radix: usize, ops
     }
 }
 
-pub fn to_radix<D, W, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
-    where
-        D: Digit<Word = W>,
-        W: Word<Digit = D>,
-        M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-        O: Ops<D, M> {
-
+pub fn to_radix<D, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     // check range of the radix
     if radix < 2 || radix > 64 {
         panic!("Invalid radix");
@@ -1061,12 +1034,8 @@ pub fn to_radix<D, W, M, O>(a: &Bignum<M>, radix: u8, ops: O) -> String
 }
 
 // c = a mod b, 0 <= c < b
-pub fn _mod<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-            O: Ops<D, M> {
+pub fn _mod<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let mut t: Bignum<M> = Bignum::new();
     div_rem(None, Some(&mut t), a, b, ops);
     if t.pos != b.pos {
@@ -1077,24 +1046,16 @@ pub fn _mod<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: 
 }
 
 // d = a * b (mod c)
-pub fn mulmod<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, c: &Bignum<M>, ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-            O: Ops<D, M> {
+pub fn mulmod<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, c: &Bignum<M>, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let mut tmp: Bignum<M> = Bignum::new();
     mul(&mut tmp, a, b, ops);
     _mod(out, &tmp, c, ops);
 }
 
 // generic comba squarer
-pub fn sqr<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-            O: Ops<D, M> {
+pub fn sqr<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     // get size of output and trim
     let pa = a.data.len() * 2;
     let pa = if pa >= a.data.capacity() {
@@ -1162,12 +1123,8 @@ pub fn sqr<D, W, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, ops: O)
 }
 
 // setup the montgomery reduction
-pub fn montgomery_setup<D, W, M, O>(a: &mut Bignum<M>, rho: &mut D, ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-            O: Ops<D, M> {
+pub fn montgomery_setup<D, M, O>(a: &mut Bignum<M>, rho: &mut D, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let digit_bits = <D as Digit>::bits();
 
     let one: D = Int::one();
@@ -1214,11 +1171,7 @@ pub fn montgomery_setup<D, W, M, O>(a: &mut Bignum<M>, rho: &mut D, ops: O)
 }
 
 // computes a = 2**b
-pub fn twoexpt<D, W, M>(out: &mut Bignum<M>, b: usize)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn twoexpt<D, M>(out: &mut Bignum<M>, b: usize) where D: Digit, M: DigitVec<D> {
     let digit_bits = <D as Digit>::bits();
 
     // zero a as per default
@@ -1244,11 +1197,7 @@ pub fn twoexpt<D, W, M>(out: &mut Bignum<M>, b: usize)
 }
 
 // out = 2 * b
-pub fn mul_2<D, W, M>(a: &mut Bignum<M>)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn mul_2<D, M>(a: &mut Bignum<M>) where D: Digit, M: DigitVec<D> {
     let digit_bits = <D as Digit>::bits();
 
     let mut carry: D = Int::zero();
@@ -1262,11 +1211,7 @@ pub fn mul_2<D, W, M>(a: &mut Bignum<M>)
     }
 }
 
-pub fn set<D, W, M>(out: &mut Bignum<M>, d: D)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn set<D, M>(out: &mut Bignum<M>, d: D) where D: Digit, M: DigitVec<D> {
     out.pos = true;
     out.data.clear();
     out.data.push(d);
@@ -1274,12 +1219,8 @@ pub fn set<D, W, M>(out: &mut Bignum<M>, d: D)
 
 // computes a = B**n mod b without division or multiplication useful for
 // normalizing numbers in a Montgomery system.
-pub fn montgomery_calc_normalization<D, W, M, O>(a: &mut Bignum<M>, b: &Bignum<M>, ops: O)
-        where
-            D: Digit<Word = W>,
-            W: Word<Digit = D>,
-            M: Data<Item = D> + Deref<Target = [D]> + DerefMut,
-            O: Ops<D, M> {
+pub fn montgomery_calc_normalization<D, M, O>(a: &mut Bignum<M>, b: &Bignum<M>, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let digit_bits = <D as Digit>::bits();
 
     // how many bits of last digit does b use

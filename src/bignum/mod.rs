@@ -179,8 +179,10 @@ impl <M> Bignum<M> where M: Data {
 }
 
 pub fn clamp<D, M>(x: &mut Bignum<M>) where D: Digit, M: DigitVec<D> {
-    while x.data[..].last().map_or(false, |&tmp| tmp == Int::zero()) {
-        x.data.pop();
+    while let Some(&tmp) = x.data[..].last() {
+        if tmp == Int::zero() {
+            x.data.pop();
+        }
     }
     if x.data.is_empty() {
         x.pos = true;
@@ -312,7 +314,7 @@ impl <D, M> Ops<D, M> for GenericOps where D: Digit, M: DigitVec<D> {
     }
 }
 
-pub fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: DigitVec<D> {
     x.data.clear();
     unsafe {
         x.data.grow_uninit(a.data.len());
@@ -324,19 +326,17 @@ pub fn copy<D, M>(x: &mut Bignum<M>, a: &Bignum<M>) where D: Digit, M: Data<Item
     x.pos = a.pos;
 }
 
-pub fn is_zero<D, M>(a: &Bignum<M>) -> bool
-        where D: Digit, M: Data<Item = D> {
+pub fn is_zero<D, M>(a: &Bignum<M>) -> bool where D: Digit, M: DigitVec<D> {
     a.data.is_empty()
 }
 
-pub fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: Data<Item = D> {
+pub fn zero<D, M>(a: &mut Bignum<M>) where D: Digit, M: DigitVec<D> {
     a.data.clear();
     a.pos = true;
 }
 
 /// Unsigned comparison
-pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize where D: Digit, M: DigitVec<D> {
     if a.data.len() > b.data.len() {
         return 1;
     } else if a.data.len() < b.data.len() {
@@ -354,8 +354,7 @@ pub fn cmp_mag<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
 }
 
 /// Signed comparison
-pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut {
+pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize where D: Digit, M: DigitVec<D> {
     if !a.pos && b.pos {
         return -1;
     } else if a.pos && b.pos {
@@ -372,7 +371,7 @@ pub fn cmp<D, M>(a: &Bignum<M>, b: &Bignum<M>) -> isize
 }
 
 pub fn add<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     if a.pos == b.pos {
         out.pos = a.pos;
         ops.unsigned_add(out, a, b);
@@ -392,7 +391,7 @@ pub fn add<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
 }
 
 pub fn add_d<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: D, ops: O)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     let mut tmp: Bignum<M> = Bignum::new();
     unsafe {
         tmp.data.grow_uninit(1);
@@ -402,7 +401,7 @@ pub fn add_d<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: D, ops: O)
 }
 
 pub fn sub<D, M, O>(out: &mut Bignum<M>, a: &Bignum<M>, b: &Bignum<M>, ops: O)
-        where D: Digit, M: Data<Item = D> + Deref<Target = [D]> + DerefMut, O: Ops<D, M> {
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
     // subtract a negative from a positive, OR
     // subtract a positive from a negative.
     // In either case, ADD their magnitudes,
@@ -1248,15 +1247,37 @@ pub fn montgomery_calc_normalization<D, M, O>(a: &mut Bignum<M>, b: &Bignum<M>, 
     }
 }
 
+// computes x/R == x (mod N) via Montgomery Reduction
+pub fn montgomery_reduce<D, M, O>(a: &mut Bignum<M>, m: &Bignum<M>, mp: D, ops: O)
+        where D: Digit, M: DigitVec<D>, O: Ops<D, M> {
+    // bail if too large
+    if m.data.len() > m.data.capacity() / 2 {
+        panic!("Too large");
+    }
+
+    let c: Bignum<M> = Bignum::new();
+
+    let mut pa = m.data.len();
+
+    // copy the input
+    let oldused = a.data.len();
+    unsafe {
+        c.data.grow_uninit(a.data.len());
+        for (c_x, &a_x) in c.data.iter_mut().zip(a.data.iter()) {
+            *c_x = a_x;
+        }
+    }
+
+    for x in (0..pa) {
+        let mut cy: D = 0;
+        // get Mu for this round
+        let mut mu = c.data[x] * mp;
+        //  _
+
+    }
+}
+
 /*
-
-/* ISO C code */
-#define MONT_START
-#define MONT_FINI
-#define LOOP_END
-#define LOOP_START \
-   mu = c[x] * mp
-
 #define INNERMUL                                      \
    do { fp_word t;                                    \
    _c[0] = t  = ((fp_word)_c[0] + (fp_word)cy) +      \
@@ -1267,14 +1288,6 @@ pub fn montgomery_calc_normalization<D, M, O>(a: &mut Bignum<M>, b: &Bignum<M>, 
 #define PROPCARRY \
    do { fp_digit t = _c[0] += cy; cy = (t < cy); } while (0)
 
-#endif
-/******************************************************************/
-
-
-#define LO  0
-
-#ifdef TFM_SMALL_MONT_SET
-#include "fp_mont_small.i"
 #endif
 
 /* computes x/R == x (mod N) via Montgomery Reduction */
@@ -1288,17 +1301,8 @@ void fp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp)
       return;
    }
 
-#ifdef TFM_SMALL_MONT_SET
-   if (m->used <= 16) {
-      fp_montgomery_reduce_small(a, m, mp);
-      return;
-   }
-#endif
-
-#if defined(USE_MEMSET)
    /* now zero the buff */
    memset(c, 0, sizeof c);
-#endif
    pa = m->used;
 
    /* copy the input */
@@ -1306,33 +1310,22 @@ void fp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp)
    for (x = 0; x < oldused; x++) {
        c[x] = a->dp[x];
    }
-#if !defined(USE_MEMSET)
-   for (; x < 2*pa+1; x++) {
-       c[x] = 0;
-   }
-#endif
-   MONT_START;
 
    for (x = 0; x < pa; x++) {
        fp_digit cy = 0;
        /* get Mu for this round */
+#define LOOP_START \
+   mu = c[x] * mp
+
        LOOP_START;
        _c   = c + x;
        tmpm = m->dp;
        y = 0;
-       #if defined(INNERMUL8)
-        for (; y < (pa & ~7); y += 8) {
-              INNERMUL8;
-              _c   += 8;
-              tmpm += 8;
-           }
-       #endif
 
        for (; y < pa; y++) {
           INNERMUL;
           ++_c;
        }
-       LOOP_END;
        while (cy) {
            PROPCARRY;
            ++_c;
@@ -1350,7 +1343,69 @@ void fp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp)
      *tmpm++ = 0;
   }
 
-  MONT_FINI;
+  a->used = pa+1;
+  fp_clamp(a);
+
+  /* if A >= m then A = A - m */
+  if (fp_cmp_mag (a, m) != FP_LT) {
+    s_fp_sub (a, m, a);
+  }
+}
+*/
+
+
+/*
+
+/* ISO C code */
+#define LOOP_START \
+   mu = c[x] * mp
+
+#define INNERMUL                                      \
+   do { fp_word t;                                    \
+   _c[0] = t  = ((fp_word)_c[0] + (fp_word)cy) +      \
+                (((fp_word)mu) * ((fp_word)*tmpm++)); \
+   cy = (t >> DIGIT_BIT);                             \
+   } while (0)
+
+#define PROPCARRY \
+   do { fp_digit t = _c[0] += cy; cy = (t < cy); } while (0)
+
+/* computes x/R == x (mod N) via Montgomery Reduction */
+void fp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp)
+{
+   fp_digit c[FP_SIZE], *_c, *tmpm, mu;
+   int      oldused, x, y, pa;
+
+    ...
+
+   for (x = 0; x < pa; x++) {
+       fp_digit cy = 0;
+       /* get Mu for this round */
+       LOOP_START;
+       _c   = c + x;
+       tmpm = m->dp;
+       y = 0;
+
+       for (; y < pa; y++) {
+          INNERMUL;
+          ++_c;
+       }
+       while (cy) {
+           PROPCARRY;
+           ++_c;
+       }
+  }
+
+  /* now copy out */
+  _c   = c + pa;
+  tmpm = a->dp;
+  for (x = 0; x < pa+1; x++) {
+     *tmpm++ = *_c++;
+  }
+
+  for (; x < oldused; x++)   {
+     *tmpm++ = 0;
+  }
 
   a->used = pa+1;
   fp_clamp(a);

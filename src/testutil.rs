@@ -59,16 +59,19 @@ fn parse_tests<F>(test_file: &str, test_name: &str, run_tests: F) where F: FnOnc
 /// Test the given Digest using test data from the specified file.
 pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
     parse_tests(test_file, "test-digest", |tests| {
-        let mut actual_result: Vec<u8> = repeat(0).take(digest.output_bytes()).collect();
         for test_table in tests {
             let test = test_table.as_table().expect("Test data must be in Table format.");
             let input = read_val(test, "input");
             let expected_result = read_val(test, "result");
 
+            assert!(digest.output_bytes() == 0 || digest.output_bytes() == expected_result.len());
+
+            let mut actual_result = vec![0u8; expected_result.len()];
+
             // Test that it works when accepting the message all at once
             digest.input(&input[..]);
             digest.result(&mut actual_result[..]);
-            assert_eq!(expected_result, actual_result);
+            assert_eq!(actual_result, expected_result);
             digest.reset();
 
             // Test that it works when accepting the message in pieces

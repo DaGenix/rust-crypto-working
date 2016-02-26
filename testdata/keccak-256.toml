@@ -1,0 +1,12 @@
+[[test-digest]]
+input-hex = ""
+result-hex = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+
+[[test-digest]]
+input-hex = "cc"
+result-hex = "eead6dbfc7340a56caedc044696a168870549a6a7f6f56961e84a54bd9970b8a"
+
+[[test-digest]]
+input-hex = "e926ae8b0af6e53176dbffcc2a6b88c6bd765f939d3d178a9bde9ef3aa131c61e31c1e42cdfaf4b4dcde579a37e150efbef5555b4c1cb40439d835a724e2fae7"
+result-hex = "574271cd13959e8ddeae5bfbdb02a3fdf54f2babfd0cbeb893082a974957d0c1"
+

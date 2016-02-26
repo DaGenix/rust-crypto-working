@@ -398,7 +398,7 @@ mod digest_tests {
     #[test]
     fn test_blake2b() {
         let mut blake2b = Blake2b::new(64);
-        test_digest(&mut blake2b, "testdata/blake2b-small.toml");
+        test_digest("testdata/blake2b-small.toml", &mut blake2b);
     }
 
     /*

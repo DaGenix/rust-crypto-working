@@ -19,41 +19,44 @@ use serialize::hex::FromHex;
 
 use digest::Digest;
 
+/// Read a value that may be specified either as a string of in hex.
 fn read_val(table: &toml::Table, key: &str) -> Vec<u8> {
     let hex_val = table.get(&(key.to_string() + "-hex"));
     let str_val = table.get(&(key.to_string() + "-str"));
 
     match (hex_val, str_val) {
         (Some(&Value::String(ref h)), None) => {
-            h.from_hex().ok().expect("Invalid hex value.")
+            match h.from_hex() {
+                Ok(res) => res,
+                Err(err) => panic!("Couldn't parse hex value: {}", err)
+            }
         },
-        (None, Some(&Value::String(ref s))) => {
-            s.as_bytes().to_vec()
-        },
-        _ => {
-            panic!("Invalid value.")
-        }
+        (None, Some(&Value::String(ref s))) => s.as_bytes().to_vec(),
+        (Some(_), Some(_)) => panic!(format!("Value {} specified as both -hex and -str.", key)),
+        (None, None) => panic!(format!("Could not find value {}.", key)),
+        _ => panic!(format!("Value {} is not a String.", key))
     }
 }
 
+/// Parse the tests file, passing tests with the specified name
+/// to the given function to run them.
 fn parse_tests<F>(test_file: &str, test_name: &str, run_tests: F) where F: FnOnce(&toml::Array) {
     let mut input = String::new();
-    File::open(test_file).and_then(|mut f| {
-        f.read_to_string(&mut input)
-    }).unwrap();
+    if let Err(err) = File::open(test_file).and_then(|mut f| f.read_to_string(&mut input)) {
+        panic!(format!("Failed to read file {}: {}", test_file, err));
+    }
 
     let mut parser = toml::Parser::new(&input);
-    let toml = parser.parse().expect("toml file is invalid");
+    let toml = parser.parse().expect(&format!("Test file {} file is invalid.", test_file));
 
-    let data = Value::Table(toml);
-    if let Value::Table(root) = data {
-        if let &Value::Array(ref tests) = root.get(test_name).expect("no tests found") {
-            run_tests(tests);
-        }
-    }
+    match toml.get(test_name) {
+        Some(&Value::Array(ref tests)) => run_tests(tests),
+        _ => panic!(format!("Couldn't find any tests to run for name {}.", test_name))
+    };
 }
 
-pub fn test_digest<D>(digest: &mut D, test_file: &str) where D: Digest {
+/// Test the given Digest using tests data from the specified file.
+pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
     parse_tests(test_file, "test-digest", |tests| {
         let mut actual_result: Vec<u8> = repeat(0).take(digest.output_bytes()).collect();
         for test_table in tests {

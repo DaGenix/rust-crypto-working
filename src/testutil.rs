@@ -61,29 +61,26 @@ pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
     parse_tests(test_file, "test-digest", |tests| {
         let mut actual_result: Vec<u8> = repeat(0).take(digest.output_bytes()).collect();
         for test_table in tests {
-            if let &Value::Table(ref test) = test_table {
-                let input = read_val(test, "input");
-                let expected_result = read_val(test, "result");
+            let test = test_table.as_table().expect("Test data must be in Table format.");
+            let input = read_val(test, "input");
+            let expected_result = read_val(test, "result");
 
-                // Test that it works when accepting the message all at once
-                digest.input(&input[..]);
-                digest.result(&mut actual_result[..]);
-                assert_eq!(expected_result, actual_result);
-                digest.reset();
+            // Test that it works when accepting the message all at once
+            digest.input(&input[..]);
+            digest.result(&mut actual_result[..]);
+            assert_eq!(expected_result, actual_result);
+            digest.reset();
 
-                // Test that it works when accepting the message in pieces
-                let len = input.len();
-                let mut left = len;
-                while left > 0 {
-                    let take = (left + 1) / 2;
-                    digest.input(&input[len - left..take + len - left]);
-                    left -= take;
-                }
-
-                digest.result(&mut actual_result[..]);
-                assert_eq!(actual_result, expected_result);
-                digest.reset();
+            // Test that it works when accepting the message in pieces
+            let mut i = 0;
+            while i < input.len() {
+                let input_len = (input.len() - i + 1)/2;
+                digest.input(&input[i..i + input_len]);
+                i += input_len;
             }
+            digest.result(&mut actual_result[..]);
+            assert_eq!(actual_result, expected_result);
+            digest.reset();
         }
     });
 }
@@ -92,18 +89,30 @@ pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
 pub fn test_mac<F, M>(test_file: &str, create_mac: F) where M: Mac, F: Fn(&[u8]) -> M {
     parse_tests(test_file, "test-mac", |tests| {
         for test_table in tests {
-            if let &Value::Table(ref test) = test_table {
-                let key = read_val(test, "key");
-                let input = read_val(test, "input");
-                let expected_result = MacResult::new(&read_val(test, "result"));
+            let test = test_table.as_table().expect("Test data must be in Table format.");
+            let key = read_val(test, "key");
+            let input = read_val(test, "input");
+            let expected_result = MacResult::new(&read_val(test, "result"));
 
-                let mut mac = create_mac(&key);
+            let mut mac = create_mac(&key);
 
-                // Test that it works when accepting the message all at once
-                mac.input(&input[..]);
-                let actual_result = mac.result();
-                assert!(actual_result == expected_result);
+            // Test that it works when accepting the message all at once
+            mac.input(&input[..]);
+            let actual_result = mac.result();
+            assert!(actual_result == expected_result);
+            mac.reset();
+
+            // Test that it works when accepting the message in pieces
+            let mut i = 0;
+            while i < input.len() {
+                let input_len = (input.len() - i + 1)/2;
+                mac.input(&input[i..i + input_len]);
+                println!("{} - {}", i, i + input_len);
+                i += input_len;
             }
+            let actual_result = mac.result();
+            assert!(actual_result == expected_result);
+            mac.reset();
         }
     });
 }

@@ -14,6 +14,9 @@ extern crate libc;
 #[cfg(all(test, feature = "with-bench"))]
 extern crate test;
 
+#[cfg(test)]
+extern crate toml;
+
 pub mod aead;
 pub mod aes;
 pub mod aes_gcm;
@@ -53,6 +56,9 @@ mod step_by;
 pub mod symmetriccipher;
 pub mod util;
 pub mod whirlpool;
+
+#[cfg(test)]
+mod testutil;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod aesni;

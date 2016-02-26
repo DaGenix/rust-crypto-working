@@ -393,8 +393,15 @@ mod digest_tests {
     use blake2b::Blake2b;
     use digest::Digest;
     use serialize::hex::FromHex;
+    use testutil::test_digest;
 
+    #[test]
+    fn test_blake2b() {
+        let mut blake2b = Blake2b::new(64);
+        test_digest(&mut blake2b, "testdata/blake2b-small.toml");
+    }
 
+    /*
     struct Test {
         input: Vec<u8>,
         output: Vec<u8>,
@@ -559,4 +566,5 @@ mod bench {
         });
         bh.bytes = bytes.len() as u64;
     }
+    */
 }

@@ -24,3 +24,6 @@ libc = "^0.2"
 time = "^0.1"
 rand = "^0.3"
 rustc-serialize = "^0.3"
+
+[dev-dependencies]
+toml = "0.1"

@@ -18,6 +18,7 @@ use toml::Value;
 use serialize::hex::FromHex;
 
 use digest::Digest;
+use mac::{Mac, MacResult};
 
 /// Read a value that may be specified either as a string of in hex.
 fn read_val(table: &toml::Table, key: &str) -> Vec<u8> {
@@ -28,13 +29,13 @@ fn read_val(table: &toml::Table, key: &str) -> Vec<u8> {
         (Some(&Value::String(ref h)), None) => {
             match h.from_hex() {
                 Ok(res) => res,
-                Err(err) => panic!("Couldn't parse hex value: {}", err)
+                Err(err) => panic!("Couldn't parse hex value for {}-hex: {}", key, err)
             }
         },
         (None, Some(&Value::String(ref s))) => s.as_bytes().to_vec(),
         (Some(_), Some(_)) => panic!(format!("Value {} specified as both -hex and -str.", key)),
-        (None, None) => panic!(format!("Could not find value {}.", key)),
-        _ => panic!(format!("Value {} is not a String.", key))
+        (None, None) => panic!(format!("Could not find value {0}-hex or {0}-str.", key)),
+        _ => panic!(format!("Value for {0}-hex or {0}-str is not a String.", key))
     }
 }
 
@@ -55,7 +56,7 @@ fn parse_tests<F>(test_file: &str, test_name: &str, run_tests: F) where F: FnOnc
     };
 }
 
-/// Test the given Digest using tests data from the specified file.
+/// Test the given Digest using test data from the specified file.
 pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
     parse_tests(test_file, "test-digest", |tests| {
         let mut actual_result: Vec<u8> = repeat(0).take(digest.output_bytes()).collect();
@@ -80,8 +81,28 @@ pub fn test_digest<D>(test_file: &str, digest: &mut D) where D: Digest {
                 }
 
                 digest.result(&mut actual_result[..]);
-                assert_eq!(expected_result, actual_result);
+                assert_eq!(actual_result, expected_result);
                 digest.reset();
+            }
+        }
+    });
+}
+
+/// Test the given Mac using test data from the specified file.
+pub fn test_mac<F, M>(test_file: &str, create_mac: F) where M: Mac, F: Fn(&[u8]) -> M {
+    parse_tests(test_file, "test-mac", |tests| {
+        for test_table in tests {
+            if let &Value::Table(ref test) = test_table {
+                let key = read_val(test, "key");
+                let input = read_val(test, "input");
+                let expected_result = MacResult::new(&read_val(test, "result"));
+
+                let mut mac = create_mac(&key);
+
+                // Test that it works when accepting the message all at once
+                mac.input(&input[..]);
+                let actual_result = mac.result();
+                assert!(actual_result == expected_result);
             }
         }
     });

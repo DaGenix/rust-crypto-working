@@ -393,12 +393,17 @@ mod digest_tests {
     use blake2b::Blake2b;
     use digest::Digest;
     use serialize::hex::FromHex;
-    use testutil::test_digest;
+    use testutil::{test_digest, test_mac};
 
     #[test]
     fn test_blake2b() {
         let mut blake2b = Blake2b::new(64);
         test_digest("testdata/blake2b-small.toml", &mut blake2b);
+    }
+
+    #[test]
+    fn test_blake2b_mac() {
+        test_mac("testdata/blake2b-small.toml", |key| Blake2b::new_keyed(64, key));
     }
 
     /*

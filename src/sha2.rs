@@ -1198,8 +1198,6 @@ static H224: [u32; STATE_LEN] = [
 
 #[cfg(test)]
 mod tests {
-    use cryptoutil::test::test_digest_1million_random;
-    use digest::Digest;
     use sha2::{Sha512, Sha384, Sha512Trunc256, Sha512Trunc224, Sha256, Sha224};
     use testutil::test_digest;
 

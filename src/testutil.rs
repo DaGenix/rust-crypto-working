@@ -136,7 +136,7 @@ fn test_in_parts<F1, F2>(
                 size_range.ind_sample(&mut rng).to_u64().unwrap()) as usize;
 
             if in_pos >= max_input_size {
-                in_pos -= max_input_size ;
+                in_pos -= max_input_size;
             }
 
             next(&sized_input[in_pos..in_pos + size]);
@@ -163,7 +163,7 @@ pub fn test_digest<D, F>(
         for test_table in tests {
             let test = test_table.as_table().expect("Test data must be in Table format.");
             let input = read_data(test, "input");
-            let input_repeat = read_opt_u32(test, "repeat-input").unwrap_or(1);
+            let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
             let expected_result = read_data(test, "result");
 
             let digest = RefCell::new(create_digest());
@@ -208,7 +208,7 @@ pub fn test_mac<F, M>(
             let test = test_table.as_table().expect("Test data must be in Table format.");
             let key = read_data(test, "key");
             let input = read_data(test, "input");
-            let input_repeat = read_opt_u32(test, "repeat-input").unwrap_or(1);
+            let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
             let expected_result = MacResult::new(&read_data(test, "result"));
 
             let mac = RefCell::new(create_mac(&key));

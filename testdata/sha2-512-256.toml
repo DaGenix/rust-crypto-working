@@ -1,0 +1,11 @@
+[[test-digest]]
+input-str = ""
+result-hex = "c672b8d1ef56ed28ab87c3622c5114069bdd3ad7b8f9737498d0c01ecef0967a"
+
+[[test-digest]]
+input-str = "The quick brown fox jumps over the lazy dog"
+result-hex = "dd9d67b371519c339ed8dbd25af90e976a1eeefd4ad3d889005e532fc5bef04d"
+
+[[test-digest]]
+input-str = "The quick brown fox jumps over the lazy dog."
+result-hex = "1546741840f8a492b959d9b8b2344b9b0eb51b004bba35c0aebaac86d45264c3"

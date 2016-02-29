@@ -461,61 +461,51 @@ mod tests {
 
     #[test]
     fn test_keccak_224() {
-        let mut digest = Sha3::new(Sha3Mode::Keccak224);
-        test_digest("testdata/keccak-224.toml", &mut digest)
+        test_digest("testdata/keccak-224.toml", || Sha3::new(Sha3Mode::Keccak224));
     }
 
     #[test]
     fn test_keccak_256() {
-        let mut digest = Sha3::new(Sha3Mode::Keccak256);
-        test_digest("testdata/keccak-256.toml", &mut digest)
+        test_digest("testdata/keccak-256.toml", || Sha3::new(Sha3Mode::Keccak256));
     }
 
     #[test]
     fn test_keccak_384() {
-        let mut digest = Sha3::new(Sha3Mode::Keccak384);
-        test_digest("testdata/keccak-384.toml", &mut digest)
+        test_digest("testdata/keccak-384.toml", || Sha3::new(Sha3Mode::Keccak384));
     }
 
     #[test]
     fn test_keccak_512() {
-        let mut digest = Sha3::new(Sha3Mode::Keccak512);
-        test_digest("testdata/keccak-512.toml", &mut digest)
+        test_digest("testdata/keccak-512.toml", || Sha3::new(Sha3Mode::Keccak512));
     }
 
     #[test]
     fn test_sha3_224() {
-        let mut digest = Sha3::new(Sha3Mode::Sha3_224);
-        test_digest("testdata/sha3-224.toml", &mut digest)
+        test_digest("testdata/sha3-224.toml", || Sha3::new(Sha3Mode::Sha3_224));
     }
 
     #[test]
     fn test_sha3_256() {
-        let mut digest = Sha3::new(Sha3Mode::Sha3_256);
-        test_digest("testdata/sha3-256.toml", &mut digest)
+        test_digest("testdata/sha3-256.toml", || Sha3::new(Sha3Mode::Sha3_256));
     }
 
     #[test]
     fn test_sha3_384() {
-        let mut digest = Sha3::new(Sha3Mode::Sha3_384);
-        test_digest("testdata/sha3-384.toml", &mut digest)
+        test_digest("testdata/sha3-384.toml", || Sha3::new(Sha3Mode::Sha3_384));
     }
 
     #[test]
     fn test_sha3_512() {
-        let mut digest = Sha3::new(Sha3Mode::Sha3_512);
-        test_digest("testdata/sha3-512.toml", &mut digest)
+        test_digest("testdata/sha3-512.toml", || Sha3::new(Sha3Mode::Sha3_512));
     }
 
     #[test]
     fn test_sha3_shake128() {
-        let mut digest = Sha3::new(Sha3Mode::Shake128);
-        test_digest("testdata/sha3-shake128.toml", &mut digest)
+        test_digest("testdata/sha3-shake128.toml", || Sha3::new(Sha3Mode::Shake128));
     }
 
     #[test]
     fn test_sha3_shake256() {
-        let mut digest = Sha3::new(Sha3Mode::Shake256);
-        test_digest("testdata/sha3-shake256.toml", &mut digest)
+        test_digest("testdata/sha3-shake256.toml", || Sha3::new(Sha3Mode::Shake256));
     }
 }

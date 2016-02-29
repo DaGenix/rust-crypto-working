@@ -17,6 +17,9 @@ extern crate test;
 #[cfg(test)]
 extern crate toml;
 
+#[cfg(test)]
+extern crate num;
+
 pub mod aead;
 pub mod aes;
 pub mod aes_gcm;

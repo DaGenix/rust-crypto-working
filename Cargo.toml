@@ -26,4 +26,5 @@ rand = "^0.3"
 rustc-serialize = "^0.3"
 
 [dev-dependencies]
-toml = "0.1"
+toml = "^0.1"
+num = "^0.1"

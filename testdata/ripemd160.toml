@@ -1,0 +1,20 @@
+[[test-digest]]
+input-str = "abc"
+result-hex = "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc"
+
+[[test-digest]]
+input-str = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+result-hex = "12a053384a9c0c88e405a06c27dcf49ada62eb2b"
+
+[[test-digest]]
+input-str = "The quick brown fox jumps over the lazy dog"
+result-hex = "37f332f68db77bd9d7edd4969571ad671cf9dd3b"
+
+[[test-digest]]
+input-str = "The quick brown fox jumps over the lazy cog"
+result-hex = "132072df690933835eb8b6ad0b77e7b6f14acad7"
+
+[[test-digest]]
+input-str = "a"
+input-repeat = 1000000
+result-hex = "52783243c1697bdbe16d37f97f68f08325dc1528"

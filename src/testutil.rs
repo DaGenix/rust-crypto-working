@@ -153,7 +153,12 @@ fn test_in_parts<F1, F2>(
 }
 
 /// Test the given Digest using test data from the specified file.
-pub fn test_digest<D, F>(test_file: &str, create_digest: F) where D: Digest, F: Fn() -> D {
+pub fn test_digest<D, F>(
+        test_file: &str,
+        block_size: usize,
+        create_digest: F) where D: Digest, F: Fn() -> D {
+    assert!(block_size < std::usize::MAX / 2);
+
     parse_tests(test_file, "test-digest", |tests| {
         for test_table in tests {
             let test = test_table.as_table().expect("Test data must be in Table format.");
@@ -184,7 +189,7 @@ pub fn test_digest<D, F>(test_file: &str, create_digest: F) where D: Digest, F: 
             test_in_parts(
                 &input,
                 input_repeat,
-                1024,
+                block_size * 2,
                 |chunk| digest.borrow_mut().input(chunk),
                 &check);
         }
@@ -192,33 +197,41 @@ pub fn test_digest<D, F>(test_file: &str, create_digest: F) where D: Digest, F: 
 }
 
 /// Test the given Mac using test data from the specified file.
-pub fn test_mac<F, M>(test_file: &str, create_mac: F) where M: Mac, F: Fn(&[u8]) -> M {
+pub fn test_mac<F, M>(
+        test_file: &str,
+        block_size: usize,
+        create_mac: F) where M: Mac, F: Fn(&[u8]) -> M {
+    assert!(block_size < std::usize::MAX / 2);
+
     parse_tests(test_file, "test-mac", |tests| {
         for test_table in tests {
             let test = test_table.as_table().expect("Test data must be in Table format.");
             let key = read_data(test, "key");
             let input = read_data(test, "input");
+            let input_repeat = read_opt_u32(test, "repeat-input").unwrap_or(1);
             let expected_result = MacResult::new(&read_data(test, "result"));
 
-            let mut mac = create_mac(&key);
+            let mac = RefCell::new(create_mac(&key));
 
-            // Test that it works when accepting the message all at once
-            mac.input(&input[..]);
-            let actual_result = mac.result();
-            assert!(actual_result == expected_result);
-            mac.reset();
+            let check = || {
+                let mut m = mac.borrow_mut();
+                let actual_result = m.result();
+                assert!(actual_result == expected_result);
+                m.reset();
+            };
 
-            // Test that it works when accepting the message in pieces
-            let mut i = 0;
-            while i < input.len() {
-                let input_len = (input.len() - i + 1)/2;
-                mac.input(&input[i..i + input_len]);
-                println!("{} - {}", i, i + input_len);
-                i += input_len;
-            }
-            let actual_result = mac.result();
-            assert!(actual_result == expected_result);
-            mac.reset();
+            test_all_at_once(
+                &input,
+                input_repeat,
+                |chunk| mac.borrow_mut().input(chunk),
+                &check);
+
+            test_in_parts(
+                &input,
+                input_repeat,
+                block_size * 2,
+                |chunk| mac.borrow_mut().input(chunk),
+                &check);
         }
     });
 }

@@ -394,12 +394,12 @@ mod digest_tests {
 
     #[test]
     fn test_blake2b() {
-        test_digest("testdata/blake2b.toml", || Blake2b::new(64));
+        test_digest("testdata/blake2b.toml", 1024, || Blake2b::new(64));
     }
 
     #[test]
     fn test_blake2b_mac() {
-        test_mac("testdata/blake2b.toml", |key| Blake2b::new_keyed(64, key));
+        test_mac("testdata/blake2b.toml", 1024, |key| Blake2b::new_keyed(64, key));
     }
 }
 

@@ -1,12 +1,11 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+
+use digest::Digest;
+use mac::{Mac, MacResult};
 
 use std;
 use std::cell::RefCell;
@@ -24,12 +23,9 @@ use toml::Value;
 
 use serialize::hex::FromHex;
 
-use digest::Digest;
-use mac::{Mac, MacResult};
-
 
 /// Read a value that may be specified either as a string of in hex.
-fn read_data(table: &toml::Table, key: &str) -> Vec<u8> {
+pub fn read_data(table: &toml::Table, key: &str) -> Vec<u8> {
     let hex_val = table.get(&(key.to_string() + "-hex"));
     let str_val = table.get(&(key.to_string() + "-str"));
 
@@ -47,7 +43,8 @@ fn read_data(table: &toml::Table, key: &str) -> Vec<u8> {
     }
 }
 
-fn read_opt_u32(table: &toml::Table, key: &str) -> Option<u32> {
+/// Read a u32 value.
+pub fn read_opt_u32(table: &toml::Table, key: &str) -> Option<u32> {
     table.get(key).map(|x| {
         let val = x.as_integer().expect(&format!("Value for {} is not an int.", key));
         val.to_u32().expect(&format!("Value for {} is not a valid u32: {}", key, val))
@@ -56,7 +53,10 @@ fn read_opt_u32(table: &toml::Table, key: &str) -> Option<u32> {
 
 /// Parse the tests file, passing tests with the specified name
 /// to the given function to run them.
-fn parse_tests<F>(test_file: &str, test_name: &str, run_tests: F) where F: FnOnce(&toml::Array) {
+pub fn parse_tests<F>(
+        test_file: &str,
+        test_name: &str,
+        run_tests: F) where F: FnOnce(&toml::Array) {
     let mut input = String::new();
     if let Err(err) = File::open(test_file).and_then(|mut f| f.read_to_string(&mut input)) {
         panic!(format!("Failed to read file {}: {}", test_file, err));
@@ -65,12 +65,33 @@ fn parse_tests<F>(test_file: &str, test_name: &str, run_tests: F) where F: FnOnc
     let mut parser = toml::Parser::new(&input);
     let toml = parser.parse().expect(&format!("Test file {} file is invalid.", test_file));
 
-    match toml.get(test_name) {
-        Some(&Value::Array(ref tests)) => run_tests(tests),
-        _ => panic!(format!("Couldn't find any tests to run for name {}.", test_name))
-    };
+    // Try to catch any typos.
+    for key in toml.keys() {
+        if key != "test-digest" && key != "test-mac" {
+            panic!(format!("Invalid test entry found: {}", key))
+        }
+    }
+
+    for (key, val) in toml {
+        match val {
+            Value::Array(tests) => {
+                if key == test_name {
+                    run_tests(&tests);
+                    return;
+                }
+            }
+            _ => panic!(format!("Found non array value for key {}", key))
+        }
+    }
 }
 
+/// Process test data in (generally) one big part.
+///
+/// Provide the test data as slices to the callback, `next`, where the
+/// each provided slice is equal to the entire `input`. This process
+/// will be repeated `input_repeat` time. After all input is provided,
+/// `check` is called to validate the result. `check` should `panic!()`
+/// if the test failed.
 fn test_all_at_once<F1, F2>(
         input: &Vec<u8>,
         input_repeat: u32,
@@ -82,6 +103,14 @@ fn test_all_at_once<F1, F2>(
     check();
 }
 
+/// Process test data in random, small parts.
+///
+/// Test data is read from `input` and passsed to the callback `next`.
+/// No slice will ever be larger than `max_input_size`. The actual sizes
+/// of the slices are random and depend on the contents of `input` - however,
+/// they will remain the same between different test runs. After all input is provided,
+/// `check` is called to validate the result. `check` should `panic!()`
+/// if the test failed.
 fn test_in_parts<F1, F2>(
         input: &Vec<u8>,
         input_repeat: u32,

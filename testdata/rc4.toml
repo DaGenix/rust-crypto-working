@@ -1,0 +1,17 @@
+[[test-synchronous-stream-cipher]]
+key-str = "Key"
+iv-str = ""
+input-str = "Plaintext"
+result-hex = "BBF316E8D940AF0AD3"
+
+[[test-synchronous-stream-cipher]]
+key-str = "Wiki"
+iv-str = ""
+input-str = "pedia"
+result-hex = "1021BF0420"
+
+[[test-synchronous-stream-cipher]]
+key-str = "Secret"
+iv-str = ""
+input-str = "Attack at dawn"
+result-hex = "45A01F645FC35B383552544B9BF5"

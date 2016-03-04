@@ -70,10 +70,6 @@ impl Decryptor for Rc4 {
 
 #[cfg(test)]
 mod test {
-    use std::cmp;
-    use std::iter::repeat;
-
-    use symmetriccipher::SynchronousStreamCipher;
     use rc4::Rc4;
 
     // use testutil::{read_data, parse_tests, test_in_parts};
@@ -82,37 +78,6 @@ mod test {
     #[test]
     fn test_rc4() {
         test_synchronous_stream_cipher("testdata/rc4.toml", 1024, |key, _| Rc4::new(key));
-        // parse_tests("testdata/rc4.toml", "test-rc4", |tests| {
-        //     for test_table in tests {
-        //         let test = test_table.as_table().expect("Test data must be in Table format.");
-        //         let key = read_data(test, "key");
-        //         let input = read_data(test, "input");
-        //         let expected_result = read_data(test, "result");
-        //
-        //         {
-        //             let mut rc4 = Rc4::new(&key);
-        //             let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
-        //             rc4.process(&input, &mut result);
-        //             assert_eq!(result, expected_result);
-        //         }
-        //
-        //         for permutation in 0..3 {
-        //             let mut rc4 = Rc4::new(&key);
-        //             let mut result = Vec::with_capacity(expected_result.len());
-        //             test_in_parts(
-        //                 &input,
-        //                 1,
-        //                 cmp::min(input.len(), 2048),
-        //                 permutation,
-        //                 |chunk| {
-        //                     let pos = result.len();
-        //                     result.extend(repeat(0).take(chunk.len()));
-        //                     rc4.process(chunk, &mut result[pos..]);
-        //                 });
-        //             assert_eq!(result, expected_result);
-        //         }
-        //     }
-        // });
     }
 }
 

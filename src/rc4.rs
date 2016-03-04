@@ -70,47 +70,49 @@ impl Decryptor for Rc4 {
 
 #[cfg(test)]
 mod test {
+    use std::cmp;
     use std::iter::repeat;
 
     use symmetriccipher::SynchronousStreamCipher;
     use rc4::Rc4;
 
-    struct Test {
-        key: &'static str,
-        input: &'static str,
-        output: Vec<u8>
-    }
-
-    fn tests() -> Vec<Test> {
-        vec![
-            Test {
-                key: "Key",
-                input: "Plaintext",
-                output: vec![0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3]
-            },
-            Test {
-                key: "Wiki",
-                input: "pedia",
-                output: vec![0x10, 0x21, 0xBF, 0x04, 0x20]
-            },
-            Test {
-                key: "Secret",
-                input: "Attack at dawn",
-                output: vec![0x45, 0xA0, 0x1F, 0x64, 0x5F, 0xC3, 0x5B,
-                          0x38, 0x35, 0x52, 0x54, 0x4B, 0x9B, 0xF5]
-            }
-        ]
-    }
+    // use testutil::{read_data, parse_tests, test_in_parts};
+    use testutil::test_synchronous_stream_cipher;
 
     #[test]
-    fn wikipedia_tests() {
-        let tests = tests();
-        for t in tests.iter() {
-            let mut rc4 = Rc4::new(t.key.as_bytes());
-            let mut result: Vec<u8> = repeat(0).take(t.output.len()).collect();
-            rc4.process(t.input.as_bytes(), &mut result);
-            assert!(result == t.output);
-        }
+    fn test_rc4() {
+        test_synchronous_stream_cipher("testdata/rc4.toml", 1024, |key, _| Rc4::new(key));
+        // parse_tests("testdata/rc4.toml", "test-rc4", |tests| {
+        //     for test_table in tests {
+        //         let test = test_table.as_table().expect("Test data must be in Table format.");
+        //         let key = read_data(test, "key");
+        //         let input = read_data(test, "input");
+        //         let expected_result = read_data(test, "result");
+        //
+        //         {
+        //             let mut rc4 = Rc4::new(&key);
+        //             let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
+        //             rc4.process(&input, &mut result);
+        //             assert_eq!(result, expected_result);
+        //         }
+        //
+        //         for permutation in 0..3 {
+        //             let mut rc4 = Rc4::new(&key);
+        //             let mut result = Vec::with_capacity(expected_result.len());
+        //             test_in_parts(
+        //                 &input,
+        //                 1,
+        //                 cmp::min(input.len(), 2048),
+        //                 permutation,
+        //                 |chunk| {
+        //                     let pos = result.len();
+        //                     result.extend(repeat(0).take(chunk.len()));
+        //                     rc4.process(chunk, &mut result[pos..]);
+        //                 });
+        //             assert_eq!(result, expected_result);
+        //         }
+        //     }
+        // });
     }
 }
 

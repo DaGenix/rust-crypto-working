@@ -6,12 +6,13 @@
 
 use digest::Digest;
 use mac::{Mac, MacResult};
+use symmetriccipher::SynchronousStreamCipher;
 
 use std;
-use std::cell::RefCell;
 use std::fs::File;
 use std::hash::{SipHasher, Hasher, Hash};
 use std::io::prelude::*;
+use std::iter::repeat;
 
 use num::traits::ToPrimitive;
 
@@ -67,7 +68,9 @@ pub fn parse_tests<F>(
 
     // Try to catch any typos.
     for key in toml.keys() {
-        if key != "test-digest" && key != "test-mac" {
+        if key != "test-digest" &&
+                key != "test-mac" &&
+                key != "test-synchronous-stream-cipher" {
             panic!(format!("Invalid test entry found: {}", key))
         }
     }
@@ -83,6 +86,7 @@ pub fn parse_tests<F>(
             _ => panic!(format!("Found non array value for key {}", key))
         }
     }
+    panic!(format!("No tests found to run for test name: {}", test_name));
 }
 
 /// Process test data in (generally) one big part.
@@ -92,15 +96,13 @@ pub fn parse_tests<F>(
 /// will be repeated `input_repeat` time. After all input is provided,
 /// `check` is called to validate the result. `check` should `panic!()`
 /// if the test failed.
-fn test_all_at_once<F1, F2>(
+pub fn test_all_at_once<F>(
         input: &Vec<u8>,
         input_repeat: u32,
-        next: F1,
-        check: F2) where F1: Fn(&[u8]), F2: Fn() {
+        mut next: F) where F: FnMut(&[u8]) {
     for _ in 0..input_repeat {
         next(&input);
     }
-    check();
 }
 
 /// Process test data in random, small parts.
@@ -111,12 +113,12 @@ fn test_all_at_once<F1, F2>(
 /// they will remain the same between different test runs. After all input is provided,
 /// `check` is called to validate the result. `check` should `panic!()`
 /// if the test failed.
-fn test_in_parts<F1, F2>(
+pub fn test_in_parts<F>(
         input: &Vec<u8>,
         input_repeat: u32,
         max_input_size: usize,
-        next: F1,
-        check: F2) where F1: Fn(&[u8]), F2: Fn() {
+        permutation: u64,
+        mut next: F) where F: FnMut(&[u8]) {
     assert!(max_input_size <= std::usize::MAX / 2 && max_input_size > 0);
 
     // We use the hash of the input to see the RNG to generate different,
@@ -151,33 +153,29 @@ fn test_in_parts<F1, F2>(
 
     let size_range = Range::new(0, max_input_size + 1);
 
-    for attempt in 0..3 {
-        let mut rng: Isaac64Rng = SeedableRng::from_seed(&[attempt, input_len, input_hash][..]);
+    let mut rng: Isaac64Rng = SeedableRng::from_seed(&[permutation, input_len, input_hash][..]);
 
-        let mut in_pos = 0;
-        let mut count = 0;
+    let mut in_pos = 0;
+    let mut count = 0;
 
-        while count < input_len {
-            let remaining = input_len - count;
-            // size can't be bigger than a usize due to how the range is defined.
-            let size = std::cmp::min(
-                remaining,
-                size_range.ind_sample(&mut rng).to_u64().unwrap()) as usize;
+    while count < input_len {
+        let remaining = input_len - count;
+        // size can't be bigger than a usize due to how the range is defined.
+        let size = std::cmp::min(
+            remaining,
+            size_range.ind_sample(&mut rng).to_u64().unwrap()) as usize;
 
-            if in_pos >= max_input_size {
-                in_pos -= max_input_size;
-            }
-
-            next(&sized_input[in_pos..in_pos + size]);
-
-            in_pos += size;
-
-            // size can't be bigger than max_input_size which is a u32, so
-            // this cast is safe.
-            count += size as u64;
+        if in_pos >= max_input_size {
+            in_pos -= max_input_size;
         }
 
-        check();
+        next(&sized_input[in_pos..in_pos + size]);
+
+        in_pos += size;
+
+        // size can't be bigger than max_input_size which is a u32, so
+        // this cast is safe.
+        count += size as u64;
     }
 }
 
@@ -195,32 +193,34 @@ pub fn test_digest<D, F>(
             let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
             let expected_result = read_data(test, "result");
 
-            let digest = RefCell::new(create_digest());
+            let mut digest = create_digest();
 
             assert!(
-                digest.borrow().output_bytes() == 0 ||
-                digest.borrow().output_bytes() == expected_result.len());
+                digest.output_bytes() == 0 ||
+                digest.output_bytes() == expected_result.len());
 
-            let check = || {
+            fn check<D: Digest>(digest: &mut D, expected_result: &Vec<u8>) {
                 let mut actual_result = vec![0u8; expected_result.len()];
-                let mut d = digest.borrow_mut();
-                d.result(&mut actual_result[..]);
-                assert_eq!(&actual_result, &expected_result);
-                d.reset();
-            };
+                digest.result(&mut actual_result[..]);
+                assert_eq!(&actual_result, expected_result);
+                digest.reset();
+            }
 
             test_all_at_once(
                 &input,
                 input_repeat,
-                |chunk| digest.borrow_mut().input(chunk),
-                &check);
+                |chunk| digest.input(chunk));
+            check(&mut digest, &expected_result);
 
-            test_in_parts(
-                &input,
-                input_repeat,
-                block_size * 2,
-                |chunk| digest.borrow_mut().input(chunk),
-                &check);
+            for permutation in 0..3 {
+                test_in_parts(
+                    &input,
+                    input_repeat,
+                    block_size * 2,
+                    permutation,
+                    |chunk| digest.input(chunk));
+                check(&mut digest, &expected_result);
+            }
         }
     });
 }
@@ -240,27 +240,69 @@ pub fn test_mac<F, M>(
             let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
             let expected_result = MacResult::new(&read_data(test, "result"));
 
-            let mac = RefCell::new(create_mac(&key));
+            let mut mac = create_mac(&key);
 
-            let check = || {
-                let mut m = mac.borrow_mut();
-                let actual_result = m.result();
-                assert!(actual_result == expected_result);
-                m.reset();
+            fn check<M: Mac>(mac: &mut M, expected_result: &MacResult) {
+                let actual_result = mac.result();
+                assert!(actual_result == *expected_result);
+                mac.reset();
             };
 
             test_all_at_once(
                 &input,
                 input_repeat,
-                |chunk| mac.borrow_mut().input(chunk),
-                &check);
+                |chunk| mac.input(chunk));
+            check(&mut mac, &expected_result);
 
-            test_in_parts(
-                &input,
-                input_repeat,
-                block_size * 2,
-                |chunk| mac.borrow_mut().input(chunk),
-                &check);
+            for permutation in 0..3 {
+                test_in_parts(
+                    &input,
+                    input_repeat,
+                    block_size * 2,
+                    permutation,
+                    |chunk| mac.input(chunk));
+                check(&mut mac, &expected_result);
+            }
+        }
+    });
+}
+
+pub fn test_synchronous_stream_cipher<F, C>(
+        test_file: &str,
+        block_size: usize,
+        create_cipher: F) where C: SynchronousStreamCipher, F: Fn(&[u8], &[u8]) -> C {
+    assert!(block_size < std::usize::MAX / 2);
+
+    parse_tests(test_file, "test-synchronous-stream-cipher", |tests| {
+        for test_table in tests {
+            let test = test_table.as_table().expect("Test data must be in Table format.");
+            let key = read_data(test, "key");
+            let iv = read_data(test, "iv");
+            let input = read_data(test, "input");
+            let expected_result = read_data(test, "result");
+
+            {
+                let mut cipher = create_cipher(&key, &iv);
+                let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
+                cipher.process(&input, &mut result);
+                assert_eq!(result, expected_result);
+            }
+
+            for permutation in 0..3 {
+                let mut cipher = create_cipher(&key, &iv);
+                let mut result = Vec::with_capacity(expected_result.len());
+                test_in_parts(
+                    &input,
+                    1,
+                    block_size,
+                    permutation,
+                    |chunk| {
+                        let pos = result.len();
+                        result.extend(repeat(0).take(chunk.len()));
+                        cipher.process(&input, &mut result[pos..]);
+                    });
+                assert_eq!(result, expected_result);
+            }
         }
     });
 }

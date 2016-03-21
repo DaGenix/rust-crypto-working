@@ -72,7 +72,6 @@ impl Decryptor for Rc4 {
 mod test {
     use rc4::Rc4;
 
-    // use testutil::{read_data, parse_tests, test_in_parts};
     use testutil::test_synchronous_stream_cipher;
 
     #[test]

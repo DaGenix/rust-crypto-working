@@ -1,0 +1,16 @@
+# From NaCl
+[[test-mac]]
+input-hex = "8e993b9f48681273c29650ba32fc76ce48332ea7164d96a4476fb8c531a1186ac0dfc17c98dce87b4da7f011ec48c97271d2c20f9b928fe2270d6fb863d51738b48eeee314a7cc8ab932164548e526ae90224368517acfeabd6bb3732bc0e9da99832b61ca01b6de56244a9e88d5f9b37973f622a43d14a6599b1f654cb45a74e355a5"
+key-hex = "eea6a7251c1e72916d11c2cb214d3c252539121d8e234e652d651fa4c8cff880"
+result-hex = "f3ffc7703f9400e52a7dfb4b3d3305d9"
+
+# from http://tools.ietf.org/html/draft-agl-tls-chacha20poly1305-04
+[[test-mac]]
+input-hex = "0000000000000000000000000000000000000000000000000000000000000000"
+key-str = "this is 32-byte key for Poly1305"
+result-hex = "49ec78090e481ec6c26b33b91ccc0307"
+
+[[test-mac]]
+input-str = "Hello world!"
+key-str = "this is 32-byte key for Poly1305"
+result-hex = "a6f745008f81c916a20dcc74eef2b2f0"

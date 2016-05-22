@@ -132,10 +132,12 @@ pub fn test_in_parts<F>(
         .expect("input length times input repeat won't fit in a u64.");
 
     // We need a buffer that so that we can get a single slice that contains
-    // max_input_size bytes - it turns out that buffer must contain 2 * max_input_size - 1
-    // bytes to allow that.
+    // max_input_size bytes - it turns out that buffer must contain 2 * input.len() - 1
+    // bytes to allow that AND the contents of input needs to appear at least twice.
     let sized_input = {
         let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(input);
+        v.extend_from_slice(input);
         if input.len() > 0 {
             while v.len() < 2 * max_input_size - 1 {
                 v.extend_from_slice(input);
@@ -158,8 +160,8 @@ pub fn test_in_parts<F>(
             remaining,
             size_range.ind_sample(&mut rng).to_u64().unwrap()) as usize;
 
-        if in_pos >= max_input_size {
-            in_pos -= max_input_size;
+        if in_pos >= std::cmp::max(max_input_size, input.len()) {
+            in_pos -= std::cmp::max(max_input_size, input.len());
         }
 
         next(&sized_input[in_pos..in_pos + size]);

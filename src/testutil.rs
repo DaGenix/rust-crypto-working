@@ -6,6 +6,7 @@
 
 use digest::Digest;
 use mac::{Mac, MacResult};
+use sha2::Sha256;
 use symmetriccipher::SynchronousStreamCipher;
 
 use std;
@@ -26,22 +27,27 @@ use serialize::hex::FromHex;
 
 
 /// Read a value that may be specified either as a string of in hex.
-pub fn read_data(table: &toml::Table, key: &str) -> Vec<u8> {
+pub fn read_data_opt(table: &toml::Table, key: &str) -> Option<Vec<u8>> {
     let hex_val = table.get(&(key.to_string() + "-hex"));
     let str_val = table.get(&(key.to_string() + "-str"));
 
     match (hex_val, str_val) {
         (Some(&Value::String(ref h)), None) => {
             match h.from_hex() {
-                Ok(res) => res,
+                Ok(res) => Some(res),
                 Err(err) => panic!("Couldn't parse hex value for {}-hex: {}", key, err)
             }
         },
-        (None, Some(&Value::String(ref s))) => s.as_bytes().to_vec(),
+        (None, Some(&Value::String(ref s))) => Some(s.as_bytes().to_vec()),
         (Some(_), Some(_)) => panic!(format!("Value {} specified as both -hex and -str.", key)),
-        (None, None) => panic!(format!("Could not find value {0}-hex or {0}-str.", key)),
+        (None, None) => None,
         _ => panic!(format!("Value for {0}-hex or {0}-str is not a String.", key))
     }
+}
+
+/// Read a value that may be specified either as a string of in hex.
+pub fn read_data(table: &toml::Table, key: &str) -> Vec<u8> {
+    read_data_opt(table, key).expect(&format!("Could not find value {0}-hex or {0}-str.", key))
 }
 
 /// Read a u32 value.
@@ -256,6 +262,31 @@ pub fn test_synchronous_stream_cipher<F, C>(
         test_file: &str,
         block_size: usize,
         create_cipher: F) where C: SynchronousStreamCipher, F: Fn(&[u8], &[u8]) -> C {
+    fn read_expected_result_hash(test: &toml::Table) -> Vec<u8> {
+        let expected_result = read_data_opt(test, "result");
+        let expected_result_hash = read_data_opt(test, "result-sha256");
+
+        if expected_result.is_some() && expected_result_hash.is_some() {
+            panic!("Cannot define both result and result-sha256.");
+        } else if let Some(ref val) = expected_result {
+            let mut hash = Sha256::new();
+            hash.input(&val);
+            let mut result: Vec<u8> = repeat(0).take(hash.output_bytes()).collect();
+            hash.result(&mut result);
+            result
+        } else if let Some(val) = expected_result_hash {
+            val
+        } else {
+            panic!("Either result or result-sha256 must be defined.")
+        }
+    }
+
+    fn check_result(hash: &mut Sha256, expected_result_hash: &Vec<u8>) {
+        let mut actual_hash: Vec<u8> = repeat(0).take(hash.output_bytes()).collect();
+        hash.result(&mut actual_hash);
+        assert_eq!(&actual_hash, expected_result_hash);
+    }
+
     assert!(block_size < std::usize::MAX / 2);
 
     let tests = parse_tests(test_file, "test-synchronous-stream-cipher");
@@ -264,29 +295,39 @@ pub fn test_synchronous_stream_cipher<F, C>(
         let key = read_data(test, "key");
         let iv = read_data(test, "iv");
         let input = read_data(test, "input");
-        let expected_result = read_data(test, "result");
+        let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
+        let expected_result_hash = read_expected_result_hash(test);
 
         {
             let mut cipher = create_cipher(&key, &iv);
-            let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
-            cipher.process(&input, &mut result);
-            assert_eq!(result, expected_result);
+            let mut tmp = Vec::with_capacity(input.len());
+            let mut hash = Sha256::new();
+            test_all_at_once(
+                &input,
+                input_repeat,
+                |chunk| {
+                    tmp.resize(chunk.len(), 0);
+                    cipher.process(chunk, &mut tmp);
+                    hash.input(&mut tmp);
+                });
+            check_result(&mut hash, &expected_result_hash);
         }
 
         for permutation in 0..3 {
             let mut cipher = create_cipher(&key, &iv);
-            let mut result = Vec::with_capacity(expected_result.len());
+            let mut tmp = Vec::with_capacity(input.len());
+            let mut hash = Sha256::new();
             test_in_parts(
                 &input,
-                1,
-                block_size,
+                input_repeat,
+                block_size * 2,
                 permutation,
                 |chunk| {
-                    let pos = result.len();
-                    result.extend(repeat(0).take(chunk.len()));
-                    cipher.process(chunk, &mut result[pos..]);
+                    tmp.resize(chunk.len(), 0);
+                    cipher.process(chunk, &mut tmp);
+                    hash.input(&mut tmp);
                 });
-            assert_eq!(result, expected_result);
+            check_result(&mut hash, &expected_result_hash);
         }
     }
 }

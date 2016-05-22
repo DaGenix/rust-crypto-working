@@ -284,7 +284,7 @@ pub fn test_synchronous_stream_cipher<F, C>(
                 |chunk| {
                     let pos = result.len();
                     result.extend(repeat(0).take(chunk.len()));
-                    cipher.process(&input, &mut result[pos..]);
+                    cipher.process(chunk, &mut result[pos..]);
                 });
             assert_eq!(result, expected_result);
         }

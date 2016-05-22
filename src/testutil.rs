@@ -54,10 +54,7 @@ pub fn read_opt_u32(table: &toml::Table, key: &str) -> Option<u32> {
 
 /// Parse the tests file, passing tests with the specified name
 /// to the given function to run them.
-pub fn parse_tests<F>(
-        test_file: &str,
-        test_name: &str,
-        run_tests: F) where F: FnOnce(&toml::Array) {
+pub fn parse_tests(test_file: &str, test_name: &str) -> toml::Array {
     let mut input = String::new();
     if let Err(err) = File::open(test_file).and_then(|mut f| f.read_to_string(&mut input)) {
         panic!(format!("Failed to read file {}: {}", test_file, err));
@@ -66,21 +63,11 @@ pub fn parse_tests<F>(
     let mut parser = toml::Parser::new(&input);
     let toml = parser.parse().expect(&format!("Test file {} file is invalid.", test_file));
 
-    // Try to catch any typos.
-    for key in toml.keys() {
-        if key != "test-digest" &&
-                key != "test-mac" &&
-                key != "test-synchronous-stream-cipher" {
-            panic!(format!("Invalid test entry found: {}", key))
-        }
-    }
-
     for (key, val) in toml {
         match val {
             Value::Array(tests) => {
                 if key == test_name {
-                    run_tests(&tests);
-                    return;
+                    return tests;
                 }
             }
             _ => panic!(format!("Found non array value for key {}", key))
@@ -186,43 +173,42 @@ pub fn test_digest<D, F>(
         create_digest: F) where D: Digest, F: Fn() -> D {
     assert!(block_size < std::usize::MAX / 2);
 
-    parse_tests(test_file, "test-digest", |tests| {
-        for test_table in tests {
-            let test = test_table.as_table().expect("Test data must be in Table format.");
-            let input = read_data(test, "input");
-            let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
-            let expected_result = read_data(test, "result");
+    let tests = parse_tests(test_file, "test-digest");
+    for test_table in tests {
+        let test = test_table.as_table().expect("Test data must be in Table format.");
+        let input = read_data(test, "input");
+        let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
+        let expected_result = read_data(test, "result");
 
-            let mut digest = create_digest();
+        let mut digest = create_digest();
 
-            assert!(
-                digest.output_bytes() == 0 ||
-                digest.output_bytes() == expected_result.len());
+        assert!(
+            digest.output_bytes() == 0 ||
+            digest.output_bytes() == expected_result.len());
 
-            fn check<D: Digest>(digest: &mut D, expected_result: &Vec<u8>) {
-                let mut actual_result = vec![0u8; expected_result.len()];
-                digest.result(&mut actual_result[..]);
-                assert_eq!(&actual_result, expected_result);
-                digest.reset();
-            }
+        fn check<D: Digest>(digest: &mut D, expected_result: &Vec<u8>) {
+            let mut actual_result = vec![0u8; expected_result.len()];
+            digest.result(&mut actual_result[..]);
+            assert_eq!(&actual_result, expected_result);
+            digest.reset();
+        }
 
-            test_all_at_once(
+        test_all_at_once(
+            &input,
+            input_repeat,
+            |chunk| digest.input(chunk));
+        check(&mut digest, &expected_result);
+
+        for permutation in 0..3 {
+            test_in_parts(
                 &input,
                 input_repeat,
+                block_size * 2,
+                permutation,
                 |chunk| digest.input(chunk));
             check(&mut digest, &expected_result);
-
-            for permutation in 0..3 {
-                test_in_parts(
-                    &input,
-                    input_repeat,
-                    block_size * 2,
-                    permutation,
-                    |chunk| digest.input(chunk));
-                check(&mut digest, &expected_result);
-            }
         }
-    });
+    }
 }
 
 /// Test the given Mac using test data from the specified file.
@@ -232,39 +218,38 @@ pub fn test_mac<F, M>(
         create_mac: F) where M: Mac, F: Fn(&[u8]) -> M {
     assert!(block_size < std::usize::MAX / 2);
 
-    parse_tests(test_file, "test-mac", |tests| {
-        for test_table in tests {
-            let test = test_table.as_table().expect("Test data must be in Table format.");
-            let key = read_data(test, "key");
-            let input = read_data(test, "input");
-            let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
-            let expected_result = MacResult::new(&read_data(test, "result"));
+    let tests = parse_tests(test_file, "test-mac");
+    for test_table in tests {
+        let test = test_table.as_table().expect("Test data must be in Table format.");
+        let key = read_data(test, "key");
+        let input = read_data(test, "input");
+        let input_repeat = read_opt_u32(test, "input-repeat").unwrap_or(1);
+        let expected_result = MacResult::new(&read_data(test, "result"));
 
-            let mut mac = create_mac(&key);
+        let mut mac = create_mac(&key);
 
-            fn check<M: Mac>(mac: &mut M, expected_result: &MacResult) {
-                let actual_result = mac.result();
-                assert!(actual_result == *expected_result);
-                mac.reset();
-            };
+        fn check<M: Mac>(mac: &mut M, expected_result: &MacResult) {
+            let actual_result = mac.result();
+            assert!(actual_result == *expected_result);
+            mac.reset();
+        };
 
-            test_all_at_once(
+        test_all_at_once(
+            &input,
+            input_repeat,
+            |chunk| mac.input(chunk));
+        check(&mut mac, &expected_result);
+
+        for permutation in 0..3 {
+            test_in_parts(
                 &input,
                 input_repeat,
+                block_size * 2,
+                permutation,
                 |chunk| mac.input(chunk));
             check(&mut mac, &expected_result);
-
-            for permutation in 0..3 {
-                test_in_parts(
-                    &input,
-                    input_repeat,
-                    block_size * 2,
-                    permutation,
-                    |chunk| mac.input(chunk));
-                check(&mut mac, &expected_result);
-            }
         }
-    });
+    }
 }
 
 pub fn test_synchronous_stream_cipher<F, C>(
@@ -273,36 +258,35 @@ pub fn test_synchronous_stream_cipher<F, C>(
         create_cipher: F) where C: SynchronousStreamCipher, F: Fn(&[u8], &[u8]) -> C {
     assert!(block_size < std::usize::MAX / 2);
 
-    parse_tests(test_file, "test-synchronous-stream-cipher", |tests| {
-        for test_table in tests {
-            let test = test_table.as_table().expect("Test data must be in Table format.");
-            let key = read_data(test, "key");
-            let iv = read_data(test, "iv");
-            let input = read_data(test, "input");
-            let expected_result = read_data(test, "result");
+    let tests = parse_tests(test_file, "test-synchronous-stream-cipher");
+    for test_table in tests {
+        let test = test_table.as_table().expect("Test data must be in Table format.");
+        let key = read_data(test, "key");
+        let iv = read_data(test, "iv");
+        let input = read_data(test, "input");
+        let expected_result = read_data(test, "result");
 
-            {
-                let mut cipher = create_cipher(&key, &iv);
-                let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
-                cipher.process(&input, &mut result);
-                assert_eq!(result, expected_result);
-            }
-
-            for permutation in 0..3 {
-                let mut cipher = create_cipher(&key, &iv);
-                let mut result = Vec::with_capacity(expected_result.len());
-                test_in_parts(
-                    &input,
-                    1,
-                    block_size,
-                    permutation,
-                    |chunk| {
-                        let pos = result.len();
-                        result.extend(repeat(0).take(chunk.len()));
-                        cipher.process(&input, &mut result[pos..]);
-                    });
-                assert_eq!(result, expected_result);
-            }
+        {
+            let mut cipher = create_cipher(&key, &iv);
+            let mut result: Vec<u8> = repeat(0).take(expected_result.len()).collect();
+            cipher.process(&input, &mut result);
+            assert_eq!(result, expected_result);
         }
-    });
+
+        for permutation in 0..3 {
+            let mut cipher = create_cipher(&key, &iv);
+            let mut result = Vec::with_capacity(expected_result.len());
+            test_in_parts(
+                &input,
+                1,
+                block_size,
+                permutation,
+                |chunk| {
+                    let pos = result.len();
+                    result.extend(repeat(0).take(chunk.len()));
+                    cipher.process(&input, &mut result[pos..]);
+                });
+            assert_eq!(result, expected_result);
+        }
+    }
 }
